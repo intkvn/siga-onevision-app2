@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block titulo %}Pecosas{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Control de Pecosas</h3>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-warning">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Registrar nueva pecosa</h5>
+        <p class="text-muted">Regístrala apenas la recibas de almacén, antes de ingresarla a SIGA. Si el número ya existe, la app te avisa y no la duplica.</p>
+        <form method="post" action="/pecosas/nueva" class="row g-2">
+            <div class="col-auto">
+                <input type="text" name="numero_pecosa" class="form-control" placeholder="N° de pecosa" required>
+            </div>
+            <div class="col-auto">
+                <input type="text" name="numero_expediente" class="form-control" placeholder="N° de expediente/oficio" required>
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-primary">Registrar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<table class="table table-striped bg-white">
+    <thead>
+        <tr>
+            <th>N° Pecosa</th><th>Expediente</th><th>Estado</th><th>Firmante</th><th>Fecha firma</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in pecosas %}
+        <tr>
+            <td>{{ p.numero }}</td>
+            <td>{{ p.expediente.numero if p.expediente else "-" }}</td>
+            <td><span class="badge bg-secondary">{{ p.estado }}</span></td>
+            <td>{{ p.firmante or "-" }}</td>
+            <td>{{ p.fecha_firma or "-" }}</td>
+            <td>
+                {% if p.estado != "Firmada" %}
+                <form method="post" action="/pecosas/{{ p.id }}/firmar" class="d-flex gap-1">
+                    <input type="text" name="firmante" class="form-control form-control-sm" placeholder="Quién firmó" required>
+                    <button class="btn btn-sm btn-outline-success">Marcar firmada</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

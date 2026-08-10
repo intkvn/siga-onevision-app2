@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block titulo %}Normalización{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Normalización (SIGA → One Visión)</h3>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5>1. Sube el reporte de Altas Institucionales (SIGA) y elige las pecosas de este lote</h5>
+        {% if not pendientes %}
+        <p class="text-muted">No hay pecosas pendientes de normalizar. Regístralas primero en <a href="/pecosas">Pecosas</a>.</p>
+        {% else %}
+        <form method="post" action="/normalizacion/procesar" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label class="form-label">Reporte SIGA (Excel)</label>
+                <input type="file" name="archivo" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Pecosas pendientes</label>
+                {% for p in pendientes %}
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="pecosas_seleccionadas" value="{{ p.numero }}" id="pec{{ p.id }}" checked>
+                    <label class="form-check-label" for="pec{{ p.id }}">{{ p.numero }} (expediente {{ p.expediente.numero if p.expediente else "-" }})</label>
+                </div>
+                {% endfor %}
+            </div>
+            <button type="submit" class="btn btn-primary">Procesar y cruzar datos</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<h5>Lotes recientes</h5>
+<table class="table table-sm bg-white">
+    <thead><tr><th>ID</th><th>Fecha</th><th>Archivo generado</th><th></th></tr></thead>
+    <tbody>
+    {% for l in lotes %}
+        <tr>
+            <td>{{ l.id }}</td>
+            <td>{{ l.fecha }}</td>
+            <td>{{ l.archivo_generado or "-" }}</td>
+            <td><a href="/normalizacion/lote/{{ l.id }}">Ver</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block titulo %}Impresión QR{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Impresión de stickers QR</h3>
+<div class="card">
+    <div class="card-body">
+        <p class="text-muted">
+            Sube el reporte TOTAL que descargas de One Visión (con Código QR y Ruta QR)
+            después de hacer la carga masiva. La app corrige el bug del código patrimonial,
+            cruza contra el lote que elijas, y te devuelve el archivo listo para BarTender
+            (hoja "BarTender") y la hoja de impresión física con los expedientes (hoja "Hoja 1").
+        </p>
+        <form method="post" action="/impresion/procesar" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label class="form-label">Lote a cruzar</label>
+                <select name="lote_id" class="form-select" required>
+                    {% for l in lotes %}
+                    <option value="{{ l.id }}">Lote #{{ l.id }} — {{ l.fecha }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Reporte QR de One Visión (Excel)</label>
+                <input type="file" name="archivo" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Cruzar y generar hoja de impresión</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

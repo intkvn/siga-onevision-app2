@@ -14,8 +14,8 @@
             <div class="mb-3">
                 <label class="form-label">Lote a cruzar</label>
                 <select name="lote_id" class="form-select" required>
-                    {% for l in lotes %}
-                    <option value="{{ l.id }}">Lote #{{ l.id }} — {{ l.fecha }}</option>
+                    {% for item in lotes %}
+                    <option value="{{ item.lote.id }}">Lote #{{ item.lote.id }} — {{ item.lote.fecha }} ({{ item.estado }})</option>
                     {% endfor %}
                 </select>
             </div>
@@ -30,13 +30,20 @@
 
 <h5>Lotes recientes</h5>
 <table class="table table-sm bg-white">
-    <thead><tr><th>ID</th><th>Fecha</th><th></th></tr></thead>
+    <thead><tr><th>ID</th><th>Fecha</th><th>Expedientes</th><th>Estado</th><th></th></tr></thead>
     <tbody>
-    {% for l in lotes %}
+    {% for item in lotes %}
         <tr>
-            <td>{{ l.id }}</td>
-            <td>{{ l.fecha }}</td>
-            <td><a href="/impresion/resultado/{{ l.id }}">Ver</a></td>
+            <td>{{ item.lote.id }}</td>
+            <td>{{ item.lote.fecha }}</td>
+            <td>{{ item.expedientes|join(", ") if item.expedientes else "-" }}</td>
+            <td>
+                {% if "Completo" in item.estado %}<span class="badge bg-success">{{ item.estado }}</span>
+                {% elif "Parcial" in item.estado %}<span class="badge bg-warning text-dark">{{ item.estado }}</span>
+                {% else %}<span class="badge bg-secondary">{{ item.estado }}</span>
+                {% endif %}
+            </td>
+            <td><a href="/impresion/resultado/{{ item.lote.id }}">Ver</a></td>
         </tr>
     {% endfor %}
     </tbody>

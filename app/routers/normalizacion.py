@@ -48,7 +48,10 @@ async def procesar_reporte(
     finally:
         os.remove(ruta_temporal)
 
-    lote = LoteCarga(anio=ANIO_INVENTARIO, ejecutora=EJECUTORA)
+    lote = LoteCarga(
+        anio=ANIO_INVENTARIO, ejecutora=EJECUTORA,
+        pecosas_solicitadas=",".join(pecosas_seleccionadas),
+    )
     db.add(lote)
     db.flush()
 
@@ -86,12 +89,7 @@ async def procesar_reporte(
         pecosa.estado = "Normalizada"
 
     db.commit()
-
-    pecosas_sin_filas = [p for p in pecosas_seleccionadas if p not in pecosas_encontradas]
-    url = f"/normalizacion/lote/{lote.id}"
-    if pecosas_sin_filas:
-        url += "?pecosas_no_encontradas=" + ",".join(pecosas_sin_filas)
-    return RedirectResponse(url=url, status_code=303)
+    return RedirectResponse(url=f"/normalizacion/lote/{lote.id}", status_code=303)
 
 
 def pd_to_datetime(valor):
@@ -111,6 +109,16 @@ def _cruce_incompleto(b):
     return sin_persona or sin_centro
 
 
+def _pecosas_no_encontradas(lote, bienes):
+    """Pecosas que se marcaron para este lote pero no tienen ningún bien
+    (no aparecieron en el reporte de SIGA que se subió)."""
+    if not lote.pecosas_solicitadas:
+        return []
+    solicitadas = [p for p in lote.pecosas_solicitadas.split(",") if p]
+    con_bienes = {b.pecosa.numero for b in bienes if b.pecosa}
+    return [p for p in solicitadas if p not in con_bienes]
+
+
 @router.get("/normalizacion/lote/{lote_id}", response_class=HTMLResponse)
 def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
@@ -118,12 +126,16 @@ def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=De
     personas = db.query(Persona).order_by(Persona.nombre_completo).all()
     centros = db.query(CentroCosto).order_by(CentroCosto.nombre_depend).all()
     pendientes = [b for b in bienes if _cruce_incompleto(b)]
+    pecosas_no_encontradas = _pecosas_no_encontradas(lote, bienes)
+    puede_generar = not pendientes and not pecosas_no_encontradas and bienes
     return templates.TemplateResponse(
         "lote_detalle.html",
         {
             "request": request, "lote": lote, "bienes": bienes,
             "personas": personas, "centros": centros,
             "pendientes": pendientes, "estados": ESTADOS,
+            "pecosas_no_encontradas": pecosas_no_encontradas,
+            "puede_generar": puede_generar,
         },
     )
 
@@ -151,11 +163,19 @@ def corregir_bien(
 def generar_archivo(lote_id: int, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
     todos = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
-    bienes = [b for b in todos if not _cruce_incompleto(b)]
+
+    pecosas_no_encontradas = _pecosas_no_encontradas(lote, todos)
+    pendientes = [b for b in todos if _cruce_incompleto(b)]
+    if pecosas_no_encontradas or pendientes or not todos:
+        mensaje = (
+            "No se puede generar el archivo: revisa las pecosas sin filas y los cruces "
+            "pendientes marcados en esta página antes de generar."
+        )
+        return RedirectResponse(url=f"/normalizacion/lote/{lote_id}?error={mensaje}", status_code=303)
 
     nombre_archivo = f"formato_importacion_lote_{lote_id}.xls"
     ruta_salida = os.path.join(tempfile.gettempdir(), nombre_archivo)
-    generar_formato_importacion(bienes, lote.anio, lote.ejecutora, ruta_salida)
+    generar_formato_importacion(todos, lote.anio, lote.ejecutora, ruta_salida)
 
     lote.archivo_generado = nombre_archivo
     db.commit()

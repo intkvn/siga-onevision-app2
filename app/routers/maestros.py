@@ -96,6 +96,7 @@ def editar_centro(
         centro.ipress = ipress.strip()
         db.commit()
     return RedirectResponse(url="/maestros", status_code=303)
+@router.post("/maestros/personas/importar")
 async def importar_personas(
     archivo: UploadFile = File(...), db: Session = Depends(get_db), _=Depends(requiere_login)
 ):

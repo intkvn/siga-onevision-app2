@@ -3,10 +3,14 @@
 {% block contenido %}
 <h3 class="mb-4">Normalización (SIGA → One Visión)</h3>
 
+{% if request.query_params.get("error") %}
+<div class="alert alert-warning">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
 <div class="card mb-4">
     <div class="card-body">
-        <h5>1. Sube el reporte de Altas Institucionales (SIGA) y elige las pecosas de este lote</h5>
-        {% if not pendientes %}
+        <h5>1. Sube el reporte de Altas Institucionales (SIGA) y elige los expedientes de este lote</h5>
+        {% if not expedientes %}
         <p class="text-muted">No hay pecosas pendientes de normalizar. Regístralas primero en <a href="/pecosas">Pecosas</a>.</p>
         {% else %}
         <form method="post" action="/normalizacion/procesar" enctype="multipart/form-data">
@@ -15,11 +19,13 @@
                 <input type="file" name="archivo" class="form-control" required>
             </div>
             <div class="mb-3">
-                <label class="form-label">Pecosas pendientes</label>
-                {% for p in pendientes %}
+                <label class="form-label">Expedientes pendientes</label>
+                {% for numero_exp, pecosas in expedientes.items() %}
                 <div class="form-check">
-                    <input class="form-check-input" type="checkbox" name="pecosas_seleccionadas" value="{{ p.numero }}" id="pec{{ p.id }}" checked>
-                    <label class="form-check-label" for="pec{{ p.id }}">{{ p.numero }} (expediente {{ p.expediente.numero if p.expediente else "-" }})</label>
+                    <input class="form-check-input" type="checkbox" name="expedientes_seleccionados" value="{{ numero_exp }}" id="exp{{ numero_exp }}" checked>
+                    <label class="form-check-label" for="exp{{ numero_exp }}">
+                        Expediente {{ numero_exp }} — {{ pecosas|length }} pecosa(s): {{ pecosas|join(", ") }}
+                    </label>
                 </div>
                 {% endfor %}
             </div>

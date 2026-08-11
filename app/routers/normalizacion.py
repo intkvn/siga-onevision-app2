@@ -56,12 +56,14 @@ async def procesar_reporte(
         p.numero.lstrip("0") or "0": p
         for p in db.query(Pecosa).filter(Pecosa.numero.in_(pecosas_seleccionadas)).all()
     }
+    pecosas_encontradas = set()
 
     for _, fila in df_filtrado.iterrows():
         numero_pecosa = extraer_numero_pecosa(fila["observaciones"])
         pecosa = pecosas_por_numero.get(numero_pecosa.lstrip("0") or "0")
         if pecosa is None:
             continue  # fila cuya pecosa no fue seleccionada en este lote
+        pecosas_encontradas.add(pecosa.numero)
 
         resultado_cruce = cruzar_fila(db, fila.get("nombre_completo"), fila.get("nombre_depend"))
 
@@ -84,7 +86,12 @@ async def procesar_reporte(
         pecosa.estado = "Normalizada"
 
     db.commit()
-    return RedirectResponse(url=f"/normalizacion/lote/{lote.id}", status_code=303)
+
+    pecosas_sin_filas = [p for p in pecosas_seleccionadas if p not in pecosas_encontradas]
+    url = f"/normalizacion/lote/{lote.id}"
+    if pecosas_sin_filas:
+        url += "?pecosas_no_encontradas=" + ",".join(pecosas_sin_filas)
+    return RedirectResponse(url=url, status_code=303)
 
 
 def pd_to_datetime(valor):
@@ -96,13 +103,21 @@ def pd_to_datetime(valor):
         return None
 
 
+def _cruce_incompleto(b):
+    """True si falta la persona/centro, o si están asignados pero con
+    DNI/IPRESS vacío (dato incompleto en el maestro)."""
+    sin_persona = not b.persona_id or not (b.persona and b.persona.dni)
+    sin_centro = not b.centro_costo_id or not (b.centro_costo and b.centro_costo.ipress)
+    return sin_persona or sin_centro
+
+
 @router.get("/normalizacion/lote/{lote_id}", response_class=HTMLResponse)
 def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
     bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
     personas = db.query(Persona).order_by(Persona.nombre_completo).all()
     centros = db.query(CentroCosto).order_by(CentroCosto.nombre_depend).all()
-    pendientes = [b for b in bienes if not b.persona_id or not b.centro_costo_id]
+    pendientes = [b for b in bienes if _cruce_incompleto(b)]
     return templates.TemplateResponse(
         "lote_detalle.html",
         {
@@ -135,11 +150,8 @@ def corregir_bien(
 @router.get("/normalizacion/lote/{lote_id}/generar")
 def generar_archivo(lote_id: int, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
-    bienes = db.query(BienAlta).filter(
-        BienAlta.lote_id == lote_id,
-        BienAlta.persona_id.isnot(None),
-        BienAlta.centro_costo_id.isnot(None),
-    ).all()
+    todos = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
+    bienes = [b for b in todos if not _cruce_incompleto(b)]
 
     nombre_archivo = f"formato_importacion_lote_{lote_id}.xls"
     ruta_salida = os.path.join(tempfile.gettempdir(), nombre_archivo)

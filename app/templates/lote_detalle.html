@@ -3,12 +3,17 @@
 {% block contenido %}
 <h3 class="mb-3">Lote #{{ lote.id }}</h3>
 
-{% if request.query_params.get("pecosas_no_encontradas") %}
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
+{% if pecosas_no_encontradas %}
 <div class="alert alert-danger">
     ⚠️ Estas pecosas las marcaste para este lote pero <strong>no aparecieron ninguna fila suya</strong>
     en el reporte de SIGA que subiste — revisa que el reporte sea el correcto o que el número esté bien
     escrito en la columna "observaciones" de SIGA:
-    <strong>{{ request.query_params.get("pecosas_no_encontradas") }}</strong>
+    <strong>{{ pecosas_no_encontradas|join(", ") }}</strong>.
+    Mientras esto no se corrija, no se puede generar el archivo (saldría incompleto).
 </div>
 {% endif %}
 
@@ -18,13 +23,17 @@
     o porque el nombre sí cruzó pero su DNI/IPRESS está vacío en <a href="/maestros">Maestros</a>.
     Corrígelos abajo antes de generar el archivo, o el generador los omitirá.
 </div>
-{% else %}
+{% elif puede_generar %}
 <div class="alert alert-success">
     Todos los bienes tienen su cruce completo. Ya puedes generar el archivo.
 </div>
 {% endif %}
 
+{% if puede_generar %}
 <a href="/normalizacion/lote/{{ lote.id }}/generar" class="btn btn-success mb-4">Generar archivo .xls para One Visión</a>
+{% else %}
+<button class="btn btn-secondary mb-4" disabled>Generar archivo .xls para One Visión (corrige lo de arriba primero)</button>
+{% endif %}
 
 <table class="table table-sm bg-white">
     <thead>

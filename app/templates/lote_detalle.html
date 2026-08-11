@@ -3,9 +3,20 @@
 {% block contenido %}
 <h3 class="mb-3">Lote #{{ lote.id }}</h3>
 
+{% if request.query_params.get("pecosas_no_encontradas") %}
+<div class="alert alert-danger">
+    ⚠️ Estas pecosas las marcaste para este lote pero <strong>no aparecieron ninguna fila suya</strong>
+    en el reporte de SIGA que subiste — revisa que el reporte sea el correcto o que el número esté bien
+    escrito en la columna "observaciones" de SIGA:
+    <strong>{{ request.query_params.get("pecosas_no_encontradas") }}</strong>
+</div>
+{% endif %}
+
 {% if pendientes %}
 <div class="alert alert-warning">
-    Hay {{ pendientes|length }} bien(es) sin cruce completo (falta persona o centro de costo). Corrígelos abajo antes de generar el archivo, o el generador los omitirá.
+    Hay {{ pendientes|length }} bien(es) con cruce incompleto — porque falta asignar persona/centro,
+    o porque el nombre sí cruzó pero su DNI/IPRESS está vacío en <a href="/maestros">Maestros</a>.
+    Corrígelos abajo antes de generar el archivo, o el generador los omitirá.
 </div>
 {% else %}
 <div class="alert alert-success">
@@ -25,18 +36,24 @@
     </thead>
     <tbody>
     {% for b in bienes %}
-        <tr class="{{ 'table-warning' if (not b.persona_id or not b.centro_costo_id) else '' }}">
+        {% set falta_centro = not b.centro_costo_id or not (b.centro_costo and b.centro_costo.ipress) %}
+        {% set falta_persona = not b.persona_id or not (b.persona and b.persona.dni) %}
+        <tr class="{{ 'table-warning' if (falta_centro or falta_persona) else '' }}">
             <td>{{ b.codigo_patrimonial }}</td>
             <td>{{ b.descripcion }}</td>
             <td>{{ b.pecosa.numero if b.pecosa else "-" }}</td>
             <td>{{ b.nombre_depend_siga }}</td>
             <td>
-                {% if b.centro_costo %}{{ b.centro_costo.nombre_depend }} ({{ b.centro_costo.ipress }})
+                {% if b.centro_costo and not falta_centro %}
+                    {{ b.centro_costo.nombre_depend }} ({{ b.centro_costo.ipress }})
+                {% elif b.centro_costo and falta_centro %}
+                    <span class="text-danger">{{ b.centro_costo.nombre_depend }} — sin IPRESS.</span>
+                    <a href="/maestros">Complétalo en Maestros</a>
                 {% else %}
                 <form method="post" action="/normalizacion/bien/{{ b.id }}/corregir" class="d-flex gap-1">
                     <select name="centro_costo_id" class="form-select form-select-sm" required>
                         <option value="">Elegir centro de costo...</option>
-                        {% for c in centros %}<option value="{{ c.id }}">{{ c.nombre_depend }}</option>{% endfor %}
+                        {% for c in centros %}<option value="{{ c.id }}">{{ c.nombre_depend }}{{ " (sin IPRESS)" if not c.ipress else "" }}</option>{% endfor %}
                     </select>
                     <button class="btn btn-sm btn-outline-primary">OK</button>
                 </form>
@@ -44,12 +61,16 @@
             </td>
             <td>{{ b.nombre_completo_siga }}</td>
             <td>
-                {% if b.persona %}{{ b.persona.nombre_completo }} ({{ b.persona.dni }})
+                {% if b.persona and not falta_persona %}
+                    {{ b.persona.nombre_completo }} ({{ b.persona.dni }})
+                {% elif b.persona and falta_persona %}
+                    <span class="text-danger">{{ b.persona.nombre_completo }} — sin DNI.</span>
+                    <a href="/maestros">Complétalo en Maestros</a>
                 {% else %}
                 <form method="post" action="/normalizacion/bien/{{ b.id }}/corregir" class="d-flex gap-1">
                     <select name="persona_id" class="form-select form-select-sm" required>
                         <option value="">Elegir persona...</option>
-                        {% for p in personas %}<option value="{{ p.id }}">{{ p.nombre_completo }}</option>{% endfor %}
+                        {% for p in personas %}<option value="{{ p.id }}">{{ p.nombre_completo }}{{ " (sin DNI)" if not p.dni else "" }}</option>{% endfor %}
                     </select>
                     <button class="btn btn-sm btn-outline-primary">OK</button>
                 </form>
@@ -61,5 +82,5 @@
     </tbody>
 </table>
 
-<p class="text-muted">Si la persona o el centro de costo no existen todavía, ve a <a href="/maestros">Maestros</a> para registrarlos y luego vuelve a esta página a asignarlos.</p>
+<p class="text-muted">Si la persona o el centro de costo no existen todavía, o les falta el DNI/IPRESS, ve a <a href="/maestros">Maestros</a> para registrarlos o completarlos, y luego vuelve a esta página.</p>
 {% endblock %}

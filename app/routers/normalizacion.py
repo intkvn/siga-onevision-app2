@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models import Pecosa, BienAlta, LoteCarga, Persona, CentroCosto
 from app.auth import requiere_login
 from app.config import ANIO_INVENTARIO, EJECUTORA, ESTADOS
-from app.services.excel_siga import leer_reporte_siga, filtrar_por_pecosas
+from app.services.excel_siga import leer_reporte_siga, filtrar_por_pecosas, extraer_numero_pecosa
 from app.services.matching import cruzar_fila
 from app.services.excel_onevision import generar_formato_importacion
 
@@ -53,13 +53,13 @@ async def procesar_reporte(
     db.flush()
 
     pecosas_por_numero = {
-        p.numero: p
+        p.numero.lstrip("0") or "0": p
         for p in db.query(Pecosa).filter(Pecosa.numero.in_(pecosas_seleccionadas)).all()
     }
 
     for _, fila in df_filtrado.iterrows():
-        numero_pecosa = str(int(fila["observaciones"])) if str(fila["observaciones"]).replace(".", "").isdigit() else str(fila["observaciones"]).strip()
-        pecosa = pecosas_por_numero.get(numero_pecosa)
+        numero_pecosa = extraer_numero_pecosa(fila["observaciones"])
+        pecosa = pecosas_por_numero.get(numero_pecosa.lstrip("0") or "0")
         if pecosa is None:
             continue  # fila cuya pecosa no fue seleccionada en este lote
 

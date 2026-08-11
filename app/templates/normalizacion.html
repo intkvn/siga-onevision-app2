@@ -37,14 +37,21 @@
 
 <h5>Lotes recientes</h5>
 <table class="table table-sm bg-white">
-    <thead><tr><th>ID</th><th>Fecha</th><th>Archivo generado</th><th></th></tr></thead>
+    <thead><tr><th>ID</th><th>Fecha</th><th>Expedientes</th><th>Estado</th><th></th></tr></thead>
     <tbody>
-    {% for l in lotes %}
+    {% for item in lotes %}
         <tr>
-            <td>{{ l.id }}</td>
-            <td>{{ l.fecha }}</td>
-            <td>{{ l.archivo_generado or "-" }}</td>
-            <td><a href="/normalizacion/lote/{{ l.id }}">Ver</a></td>
+            <td>{{ item.lote.id }}</td>
+            <td>{{ item.lote.fecha }}</td>
+            <td>{{ item.expedientes|join(", ") if item.expedientes else "-" }}</td>
+            <td>
+                {% if item.estado == "Generado" %}<span class="badge bg-success">{{ item.estado }}</span>
+                {% elif item.estado == "Completo (listo para generar)" %}<span class="badge bg-primary">{{ item.estado }}</span>
+                {% elif item.estado == "Incompleto" %}<span class="badge bg-warning text-dark">{{ item.estado }}</span>
+                {% else %}<span class="badge bg-secondary">{{ item.estado }}</span>
+                {% endif %}
+            </td>
+            <td><a href="/normalizacion/lote/{{ item.lote.id }}">Ver</a></td>
         </tr>
     {% endfor %}
     </tbody>

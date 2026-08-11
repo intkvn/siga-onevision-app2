@@ -3,13 +3,32 @@
 {% block contenido %}
 <h3 class="mb-4">Maestros</h3>
 
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
+{% if request.query_params.get("actualizadas") and request.query_params.get("actualizadas") != "0" %}
+<div class="alert alert-info">Se completó el DNI de {{ request.query_params.get("actualizadas") }} persona(s) que ya existían.</div>
+{% endif %}
+{% if request.query_params.get("actualizados") and request.query_params.get("actualizados") != "0" %}
+<div class="alert alert-info">Se completó el IPRESS de {{ request.query_params.get("actualizados") }} centro(s) que ya existían.</div>
+{% endif %}
+
+{% if incompletas_p or incompletos_c %}
+<div class="alert alert-warning">
+    ⚠️ Hay {{ incompletas_p }} persona(s) sin DNI y {{ incompletos_c }} centro(s) sin IPRESS —
+    están resaltados en amarillo abajo, con un campo para completarlos directamente.
+    Mientras falten, cualquier bien que los use no podrá generar bien el archivo de One Visión.
+</div>
+{% endif %}
+
 <div class="row">
     <div class="col-md-6">
         <div class="card mb-4">
             <div class="card-body">
                 <h5>Personas (responsables)</h5>
                 <form method="post" action="/maestros/personas/importar" enctype="multipart/form-data" class="mb-3">
-                    <label class="form-label">Importar desde usuarios_responsable.xlsx</label>
+                    <label class="form-label">Importar/actualizar desde usuarios_responsable.xlsx</label>
                     <input type="file" name="archivo" class="form-control" required>
                     <button class="btn btn-sm btn-outline-primary mt-2">Importar</button>
                 </form>
@@ -18,12 +37,24 @@
                     <div class="col-4"><input type="text" name="dni" class="form-control form-control-sm" placeholder="DNI" required></div>
                     <div class="col-2"><button class="btn btn-sm btn-primary">+</button></div>
                 </form>
-                <div style="max-height:300px; overflow-y:auto;">
+                <div style="max-height:350px; overflow-y:auto;">
                     <table class="table table-sm">
                         <thead><tr><th>Nombre</th><th>DNI</th></tr></thead>
                         <tbody>
                         {% for p in personas %}
-                            <tr><td>{{ p.nombre_completo }}</td><td>{{ p.dni }}</td></tr>
+                            <tr class="{{ 'table-warning' if not p.dni else '' }}">
+                                <td>{{ p.nombre_completo }}</td>
+                                <td>
+                                    {% if p.dni %}
+                                        {{ p.dni }}
+                                    {% else %}
+                                        <form method="post" action="/maestros/personas/{{ p.id }}/editar" class="d-flex gap-1">
+                                            <input type="text" name="dni" class="form-control form-control-sm" placeholder="DNI" required>
+                                            <button class="btn btn-sm btn-outline-warning">Guardar</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
                         {% endfor %}
                         </tbody>
                     </table>
@@ -37,7 +68,7 @@
             <div class="card-body">
                 <h5>Centros de costo</h5>
                 <form method="post" action="/maestros/centros/importar" enctype="multipart/form-data" class="mb-3">
-                    <label class="form-label">Importar desde CENTROS_DE_COSTO.xlsx</label>
+                    <label class="form-label">Importar/actualizar desde CENTROS_DE_COSTO.xlsx</label>
                     <input type="file" name="archivo" class="form-control" required>
                     <button class="btn btn-sm btn-outline-primary mt-2">Importar</button>
                 </form>
@@ -46,12 +77,24 @@
                     <div class="col-4"><input type="text" name="ipress" class="form-control form-control-sm" placeholder="IPRESS" required></div>
                     <div class="col-2"><button class="btn btn-sm btn-primary">+</button></div>
                 </form>
-                <div style="max-height:300px; overflow-y:auto;">
+                <div style="max-height:350px; overflow-y:auto;">
                     <table class="table table-sm">
                         <thead><tr><th>Nombre depend.</th><th>IPRESS</th></tr></thead>
                         <tbody>
                         {% for c in centros %}
-                            <tr><td>{{ c.nombre_depend }}</td><td>{{ c.ipress }}</td></tr>
+                            <tr class="{{ 'table-warning' if not c.ipress else '' }}">
+                                <td>{{ c.nombre_depend }}</td>
+                                <td>
+                                    {% if c.ipress %}
+                                        {{ c.ipress }}
+                                    {% else %}
+                                        <form method="post" action="/maestros/centros/{{ c.id }}/editar" class="d-flex gap-1">
+                                            <input type="text" name="ipress" class="form-control form-control-sm" placeholder="IPRESS" required>
+                                            <button class="btn btn-sm btn-outline-warning">Guardar</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
                         {% endfor %}
                         </tbody>
                     </table>

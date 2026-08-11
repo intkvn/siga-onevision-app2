@@ -27,4 +27,18 @@
         </form>
     </div>
 </div>
+
+<h5>Lotes recientes</h5>
+<table class="table table-sm bg-white">
+    <thead><tr><th>ID</th><th>Fecha</th><th></th></tr></thead>
+    <tbody>
+    {% for l in lotes %}
+        <tr>
+            <td>{{ l.id }}</td>
+            <td>{{ l.fecha }}</td>
+            <td><a href="/impresion/resultado/{{ l.id }}">Ver</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
 {% endblock %}

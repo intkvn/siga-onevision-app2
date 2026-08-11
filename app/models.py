@@ -75,6 +75,7 @@ class LoteCarga(Base):
     anio = Column(String(4), nullable=False)
     ejecutora = Column(String(10), nullable=False)
     archivo_generado = Column(String(300), nullable=True)
+    pecosas_solicitadas = Column(Text, nullable=True)  # CSV de números de pecosa elegidos al procesar
 
     bienes = relationship("BienAlta", back_populates="lote")
 

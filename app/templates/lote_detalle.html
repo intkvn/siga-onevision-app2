@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block titulo %}Lote {{ lote.id }}{% endblock %}
 {% block contenido %}
-<h3 class="mb-3">Lote #{{ lote.id }}</h3>
+<h3 class="mb-1">Lote #{{ lote.id }}</h3>
+<p class="text-muted">Expedientes: {{ expedientes|join(", ") if expedientes else "-" }}</p>
 
 {% if request.query_params.get("error") %}
 <div class="alert alert-danger">{{ request.query_params.get("error") }}</div>

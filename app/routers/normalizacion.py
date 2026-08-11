@@ -13,6 +13,7 @@ from app.config import ANIO_INVENTARIO, EJECUTORA, ESTADOS
 from app.services.excel_siga import leer_reporte_siga, filtrar_por_pecosas, extraer_numero_pecosa
 from app.services.matching import cruzar_fila
 from app.services.excel_onevision import generar_formato_importacion
+from app.services.lote_status import expedientes_de_lote
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -32,11 +33,35 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
             continue
         expedientes.setdefault(exp.numero, []).append(p.numero)
 
-    lotes = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(10).all()
+    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(10).all()
+    lotes = [_resumen_lote(db, lote) for lote in lotes_query]
     return templates.TemplateResponse(
         "normalizacion.html",
         {"request": request, "expedientes": expedientes, "lotes": lotes},
     )
+
+
+def _resumen_lote(db: Session, lote: LoteCarga) -> dict:
+    """Arma el estado de un lote (Vacío / Incompleto / Completo / Generado)
+    y sus expedientes, para mostrarlo en la lista sin tener que entrar."""
+    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
+    pendientes = [b for b in bienes if _cruce_incompleto(b)]
+    no_encontradas = _pecosas_no_encontradas(lote, bienes)
+
+    if lote.archivo_generado:
+        estado = "Generado"
+    elif not bienes:
+        estado = "Vacío / sin procesar"
+    elif pendientes or no_encontradas:
+        estado = "Incompleto"
+    else:
+        estado = "Completo (listo para generar)"
+
+    return {
+        "lote": lote,
+        "estado": estado,
+        "expedientes": expedientes_de_lote(db, lote),
+    }
 
 
 def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa], df_filtrado):
@@ -202,6 +227,7 @@ def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=De
             "pendientes": pendientes, "estados": ESTADOS,
             "pecosas_no_encontradas": pecosas_no_encontradas,
             "puede_generar": puede_generar,
+            "expedientes": expedientes_de_lote(db, lote),
         },
     )
 

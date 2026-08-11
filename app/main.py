@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from sqlalchemy import text
 
 from app.config import SECRET_KEY
 from app.database import Base, engine, get_db
@@ -13,6 +14,14 @@ from app.models import Pecosa  # noqa: F401  (necesario para que create_all las 
 # Crea las tablas si no existen todavía (para un proyecto de un solo usuario,
 # esto es más simple que manejar migraciones)
 Base.metadata.create_all(bind=engine)
+
+# create_all NO agrega columnas nuevas a tablas que ya existen — así que las
+# columnas que se sumen después de la primera vez se agregan aquí a mano,
+# de forma segura (no hace nada si la columna ya existe).
+with engine.begin() as conn:
+    conn.execute(text(
+        "ALTER TABLE lotes_carga ADD COLUMN IF NOT EXISTS pecosas_solicitadas TEXT"
+    ))
 
 app = FastAPI(title="SIGA → One Visión")
 

@@ -1,6 +1,6 @@
 import os
 import tempfile
-import xlwt
+from openpyxl import Workbook
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import LoteCarga, BienAlta
 from app.auth import requiere_login
 from app.services.excel_onevision import leer_reporte_qr_onevision, corregir_codigo_patrimonial
+from app.services.lote_status import expedientes_de_lote
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -22,8 +23,31 @@ ENCABEZADOS_IMPRESION = [
 
 @router.get("/impresion", response_class=HTMLResponse)
 def formulario_impresion(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
-    lotes = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(15).all()
+    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(15).all()
+    lotes = [_resumen_impresion_lote(db, lote) for lote in lotes_query]
     return templates.TemplateResponse("impresion.html", {"request": request, "lotes": lotes})
+
+
+def _resumen_impresion_lote(db: Session, lote: LoteCarga) -> dict:
+    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
+    con_qr = [b for b in bienes if b.codigo_qr]
+
+    if not bienes:
+        estado = "Lote vacío (normaliza primero)"
+    elif not con_qr:
+        estado = "Sin reporte QR cargado"
+    elif len(con_qr) < len(bienes):
+        estado = f"Parcial ({len(con_qr)}/{len(bienes)})"
+    else:
+        estado = "Completo — listo para BarTender"
+
+    return {
+        "lote": lote,
+        "estado": estado,
+        "expedientes": expedientes_de_lote(db, lote),
+        "total": len(bienes),
+        "con_qr": len(con_qr),
+    }
 
 
 @router.post("/impresion/procesar")
@@ -45,7 +69,6 @@ async def procesar_reporte_qr(
     bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
     bienes_por_codigo = {corregir_codigo_patrimonial(b.codigo_patrimonial): b for b in bienes}
 
-    encontrados_en_este_intento = 0
     for _, fila in df_qr.iterrows():
         codigo = fila["codigo_patrimonial_corregido"]
         bien = bienes_por_codigo.get(codigo)
@@ -62,8 +85,6 @@ async def procesar_reporte_qr(
         if bien.pecosa:
             bien.pecosa.estado = "StickerGenerado"
 
-        encontrados_en_este_intento += 1
-
     db.commit()
     return RedirectResponse(url=f"/impresion/resultado/{lote_id}", status_code=303)
 
@@ -73,8 +94,7 @@ def resultado_impresion(
     lote_id: int, request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)
 ):
     """Muestra qué bienes del lote sí tienen su código QR (encontrados en el
-    reporte de One Visión que subiste) y cuáles todavía no, para que sepas
-    si falta volver a subir el reporte o si hay algo que revisar."""
+    reporte de One Visión que subiste) y cuáles todavía no."""
     bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
     encontrados = [b for b in bienes if b.codigo_qr]
     no_encontrados = [b for b in bienes if not b.codigo_qr]
@@ -96,42 +116,50 @@ def descargar_impresion(lote_id: int, db: Session = Depends(get_db), _=Depends(r
         b.pecosa.expediente.numero for b in bienes if b.pecosa and b.pecosa.expediente
     })
 
-    nombre_archivo = f"impresion_stickers_lote_{lote_id}.xls"
+    # .xlsx (no .xls) porque BarTender no acepta el formato binario antiguo.
+    nombre_archivo = f"impresion_stickers_lote_{lote_id}.xlsx"
     ruta_salida = os.path.join(tempfile.gettempdir(), nombre_archivo)
     _generar_hoja_impresion(bienes, expedientes, ruta_salida)
 
-    return FileResponse(ruta_salida, filename=nombre_archivo, media_type="application/vnd.ms-excel")
+    return FileResponse(
+        ruta_salida,
+        filename=nombre_archivo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def _generar_hoja_impresion(bienes, expedientes, ruta_salida):
-    """Genera el archivo con: Hoja 'BarTender' (datos limpios para imprimir el
+    """Genera el .xlsx con: hoja 'BarTender' (datos limpios para imprimir el
     sticker) y 'Hoja 1' (listado con encabezado de expedientes, para el
     responsable de pegar los stickers)."""
-    libro = xlwt.Workbook(encoding="utf-8")
+    libro = Workbook()
 
-    hoja_bt = libro.add_sheet("BarTender")
-    for col, titulo in enumerate(ENCABEZADOS_IMPRESION):
-        hoja_bt.write(0, col, titulo)
-    for fila_idx, bien in enumerate(bienes, start=1):
-        _escribir_fila_impresion(hoja_bt, fila_idx, bien)
+    hoja_bt = libro.active
+    hoja_bt.title = "BarTender"
+    hoja_bt.append(ENCABEZADOS_IMPRESION)
+    for bien in bienes:
+        hoja_bt.append(_fila_impresion(bien))
 
-    hoja1 = libro.add_sheet("Hoja 1")
-    hoja1.write(0, 0, f"EXPEDIENTE(S): {';'.join(expedientes)}")
-    for col, titulo in enumerate(ENCABEZADOS_IMPRESION):
-        hoja1.write(2, col, titulo)
-    for fila_idx, bien in enumerate(bienes, start=3):
-        _escribir_fila_impresion(hoja1, fila_idx, bien)
+    hoja1 = libro.create_sheet("Hoja 1")
+    hoja1.cell(row=1, column=1, value=f"EXPEDIENTE(S): {';'.join(expedientes)}")
+    for col, titulo in enumerate(ENCABEZADOS_IMPRESION, start=1):
+        hoja1.cell(row=3, column=col, value=titulo)
+    for fila_idx, bien in enumerate(bienes, start=4):
+        for col, valor in enumerate(_fila_impresion(bien), start=1):
+            hoja1.cell(row=fila_idx, column=col, value=valor)
 
     libro.save(ruta_salida)
 
 
-def _escribir_fila_impresion(hoja, fila_idx, bien):
-    hoja.write(fila_idx, 0, bien.codigo_patrimonial)
-    hoja.write(fila_idx, 1, bien.codigo_qr or "")
-    hoja.write(fila_idx, 2, bien.ruta_qr or "")
-    hoja.write(fila_idx, 3, bien.descripcion)
-    hoja.write(fila_idx, 4, bien.centro_costo.nombre_depend if bien.centro_costo else "")
-    hoja.write(fila_idx, 5, bien.marca or "")
-    hoja.write(fila_idx, 6, bien.modelo or "")
-    hoja.write(fila_idx, 7, bien.nro_serie or "")
-    hoja.write(fila_idx, 8, bien.pecosa.numero if bien.pecosa else "")
+def _fila_impresion(bien) -> list:
+    return [
+        bien.codigo_patrimonial,
+        bien.codigo_qr or "",
+        bien.ruta_qr or "",
+        bien.descripcion,
+        bien.centro_costo.nombre_depend if bien.centro_costo else "",
+        bien.marca or "",
+        bien.modelo or "",
+        bien.nro_serie or "",
+        bien.pecosa.numero if bien.pecosa else "",
+    ]

@@ -14,6 +14,10 @@
     escrito en la columna "observaciones" de SIGA:
     <strong>{{ pecosas_no_encontradas|join(", ") }}</strong>.
     Mientras esto no se corrija, no se puede generar el archivo (saldría incompleto).
+    <form method="post" action="/normalizacion/lote/{{ lote.id }}/completar" enctype="multipart/form-data" class="mt-2 d-flex gap-2 align-items-center">
+        <input type="file" name="archivo" class="form-control form-control-sm" style="max-width: 350px;" required>
+        <button type="submit" class="btn btn-sm btn-outline-danger">Reintentar con otro reporte (solo para las pecosas que faltan)</button>
+    </form>
 </div>
 {% endif %}
 

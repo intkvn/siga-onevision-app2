@@ -58,6 +58,7 @@ class Pecosa(Base):
 
     firmante = Column(String(200), nullable=True)
     fecha_firma = Column(Date, nullable=True)
+    expediente_firma = Column(String(50), nullable=True)  # N° de expediente con el que almacén devuelve la pecosa firmada
 
     creado_en = Column(DateTime, default=datetime.utcnow)
 
@@ -80,7 +81,24 @@ class LoteCarga(Base):
     bienes = relationship("BienAlta", back_populates="lote")
 
 
-class BienAlta(Base):
+class RelacionPecosaItem(Base):
+    """Una línea del reporte 'Relación de Pecosas' que se descarga de SIGA
+    (cada pecosa puede tener varias líneas de ítems distintos). Se usa
+    para saber cuántos bienes en total debería tener cada pecosa
+    (sumando cant_aprobada) y así detectar ingresos incompletos.
+    Se reemplaza por completo cada vez que se vuelve a importar el reporte."""
+    __tablename__ = "relacion_pecosa_items"
+
+    id = Column(Integer, primary_key=True)
+    nro_pecosa = Column(String(50), nullable=False, index=True)
+    ano_eje = Column(String(4), nullable=True)
+    nombre_item = Column(String(300), nullable=True)
+    nombre_depend = Column(String(250), nullable=True)
+    precio_unit = Column(String(30), nullable=True)
+    motivo_pedido = Column(String(500), nullable=True)
+    fecha_pecosa = Column(String(30), nullable=True)
+    clasificador = Column(String(50), nullable=True)
+    cant_aprobada = Column(Integer, nullable=True)
     """Cada bien mueble dado de alta, ya con los datos cruzados
     (DNI e IPRESS) listos para el Formato de Importación."""
     __tablename__ = "bienes_alta"

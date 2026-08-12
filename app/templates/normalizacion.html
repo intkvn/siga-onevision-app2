@@ -42,7 +42,7 @@
     {% for item in lotes %}
         <tr>
             <td>{{ item.lote.id }}</td>
-            <td>{{ item.lote.fecha }}</td>
+            <td>{{ item.lote.fecha.strftime("%Y-%m-%d %H:%M") }}</td>
             <td>{{ item.expedientes|join(", ") if item.expedientes else "-" }}</td>
             <td>
                 {% if item.estado == "Generado" %}<span class="badge bg-success">{{ item.estado }}</span>
@@ -51,7 +51,7 @@
                 {% else %}<span class="badge bg-secondary">{{ item.estado }}</span>
                 {% endif %}
             </td>
-            <td><a href="/normalizacion/lote/{{ item.lote.id }}">Ver</a></td>
+            <td><a href="/normalizacion/lote/{{ item.lote.id }}" class="btn btn-sm btn-outline-primary">Ver</a></td>
         </tr>
     {% endfor %}
     </tbody>

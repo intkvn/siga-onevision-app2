@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import get_db
-from app.models import Pecosa, Expediente
+from app.models import Pecosa, Expediente, Persona
 from app.auth import requiere_login
 
 router = APIRouter()
@@ -16,8 +16,9 @@ templates = Jinja2Templates(directory="app/templates")
 @router.get("/pecosas", response_class=HTMLResponse)
 def listar_pecosas(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     pecosas = db.query(Pecosa).order_by(desc(Pecosa.creado_en)).all()
+    personas = db.query(Persona).order_by(Persona.nombre_completo).all()
     return templates.TemplateResponse(
-        "pecosas.html", {"request": request, "pecosas": pecosas}
+        "pecosas.html", {"request": request, "pecosas": pecosas, "personas": personas}
     )
 
 

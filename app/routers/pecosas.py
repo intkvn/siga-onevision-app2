@@ -93,12 +93,14 @@ def registrar_pecosa(
 def marcar_firmada(
     pecosa_id: int,
     firmante: str = Form(...),
+    expediente_firma: str = Form(...),
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
     pecosa = db.query(Pecosa).get(pecosa_id)
     if pecosa:
         pecosa.firmante = firmante.strip()
+        pecosa.expediente_firma = expediente_firma.strip()
         pecosa.fecha_firma = date.today()
         pecosa.estado = "Firmada"
         db.commit()

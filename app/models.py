@@ -99,6 +99,9 @@ class RelacionPecosaItem(Base):
     fecha_pecosa = Column(String(30), nullable=True)
     clasificador = Column(String(50), nullable=True)
     cant_aprobada = Column(Integer, nullable=True)
+
+
+class BienAlta(Base):
     """Cada bien mueble dado de alta, ya con los datos cruzados
     (DNI e IPRESS) listos para el Formato de Importación."""
     __tablename__ = "bienes_alta"

@@ -142,32 +142,45 @@ def _normalizar_texto(t) -> str:
 
 @router.get("/control/exportar")
 def exportar_control(db: Session = Depends(get_db), _=Depends(requiere_login)):
-    """Reporte final: un renglón por cada bien que ya tiene su código QR
-    generado (el mismo universo del reporte de BarTender), cruzado con
-    los datos de origen de la Relación de Pecosas (motivo del pedido,
-    clasificador, fecha de la pecosa, nombre del ítem tal como lo pidió
-    almacén)."""
+    """Reporte con DOS hojas:
+    1) 'Todas las Pecosas' — el listado completo de pecosas que trae el
+       reporte de SIGA cargado, con su estado al final (para enviar a
+       almacén y pedir lo que falta).
+    2) 'Bienes con QR' — el detalle de cada bien que ya tiene su código
+       QR generado (el mismo universo del reporte de BarTender)."""
+    filas_control = _calcular_control(db)
+
     items = db.query(RelacionPecosaItem).all()
     items_por_pecosa = defaultdict(list)
     for it in items:
         items_por_pecosa[it.nro_pecosa].append(it)
 
-    bienes = (
-        db.query(BienAlta)
-        .filter(BienAlta.codigo_qr.isnot(None))
-        .all()
-    )
+    bienes = db.query(BienAlta).filter(BienAlta.codigo_qr.isnot(None)).all()
 
     libro = Workbook()
-    hoja = libro.active
-    hoja.title = "Control de Pecosas"
-    encabezados = [
+
+    # --- Hoja 1: todas las pecosas del reporte, con su estado ---
+    hoja1 = libro.active
+    hoja1.title = "Todas las Pecosas"
+    hoja1.append([
+        "ano_eje", "Numero pecosa", "fecha_pecosa", "nombre_depend", "motivo_pedido",
+        "clasificador", "Cant. Esperada", "Cant. Ingresada", "Responsable",
+        "Nro Expediente Alta", "Nro Expediente Firma", "Estado",
+    ])
+    for f in filas_control:
+        hoja1.append([
+            f["ano_eje"], f["nro_pecosa"], f["fecha_pecosa"], f["nombre_depend"], f["motivo_pedido"],
+            f["lineas"][0].clasificador if f["lineas"] else "", f["cantidad_esperada"], f["cantidad_ingresada"],
+            f["firmante"] or "", f["expediente_alta"] or "", f["expediente_firma"] or "", f["estado"],
+        ])
+
+    # --- Hoja 2: solo los bienes que ya tienen QR generado ---
+    hoja2 = libro.create_sheet("Bienes con QR")
+    hoja2.append([
         "ano_eje", "Numero pecosa", "fecha_pecosa", "Codigo Patrimonial", "Codigo QR",
         "Bien", "Establecimiento", "Marca", "Modelo", "Nro Serie",
         "motivo_pedido", "clasificador", "Responsable", "Nro Expediente Alta", "Nro Expediente Firma",
-    ]
-    hoja.append(encabezados)
-
+    ])
     for bien in bienes:
         numero_pecosa = bien.pecosa.numero if bien.pecosa else ""
         candidatos = items_por_pecosa.get(numero_pecosa, [])
@@ -182,7 +195,7 @@ def exportar_control(db: Session = Depends(get_db), _=Depends(requiere_login)):
             if item is None:
                 item = candidatos[0]  # mejor esfuerzo si la pecosa trae varios tipos de ítem
 
-        hoja.append([
+        hoja2.append([
             item.ano_eje if item else (bien.lote.anio if bien.lote else ""),
             numero_pecosa,
             item.fecha_pecosa if item else "",

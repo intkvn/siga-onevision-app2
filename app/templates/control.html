@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block titulo %}Control de Pecosas{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Control General de Pecosas</h3>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5>Importar Relación de Pecosas (SIGA)</h5>
+        <p class="text-muted">
+            Sube el reporte de "Relación de Pecosas" tal como lo descargas de SIGA. Cada vez que lo subas
+            reemplaza por completo la tabla — descárgalo de nuevo cuando quieras actualizar este control.
+        </p>
+        <form method="post" action="/control/importar" enctype="multipart/form-data" class="d-flex gap-2">
+            <input type="file" name="archivo" class="form-control" style="max-width: 400px;" required>
+            <button type="submit" class="btn btn-primary">Importar / actualizar</button>
+        </form>
+    </div>
+</div>
+
+{% if filas %}
+<div class="row mb-4">
+    {% for estado in estados %}
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="fs-3">{{ resumen.get(estado, 0) }}</div>
+                <div class="text-muted small">{{ estado }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte de bienes con QR generado (Excel)</a>
+<p class="text-muted small">Trae un renglón por cada bien que ya tiene su código QR, con código patrimonial, marca, modelo, N° de serie, y los datos de origen de la pecosa (motivo del pedido, clasificador, fecha).</p>
+
+<table class="table table-sm bg-white">
+    <thead>
+        <tr>
+            <th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th>
+            <th>Esperada</th><th>Ingresada</th><th>Estado</th>
+            <th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for f in filas %}
+        <tr>
+            <td>{{ f.nro_pecosa }}</td>
+            <td>{{ f.nombre_depend }}</td>
+            <td>{{ f.fecha_pecosa }}</td>
+            <td>{{ f.cantidad_esperada }}</td>
+            <td>{{ f.cantidad_ingresada }}</td>
+            <td>
+                {% if f.estado == "Pendiente envío almacén" %}<span class="badge bg-secondary">{{ f.estado }}</span>
+                {% elif f.estado == "Ingresada parcial en SIGA" %}<span class="badge bg-warning text-dark">{{ f.estado }}</span>
+                {% elif f.estado == "Ingresado a SIGA y OVC (falta firma)" %}<span class="badge bg-primary">{{ f.estado }}</span>
+                {% else %}<span class="badge bg-success">{{ f.estado }}</span>
+                {% endif %}
+            </td>
+            <td>{{ f.firmante or "-" }}</td>
+            <td>{{ f.expediente_alta or "-" }}</td>
+            <td>{{ f.expediente_firma or "-" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-muted">Importa el reporte de Relación de Pecosas para ver el control.</p>
+{% endif %}
+{% endblock %}

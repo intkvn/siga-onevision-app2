@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block titulo %}Carga Inicial{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Carga Inicial (datos históricos)</h3>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <p class="text-muted">
+            Sube todos los reportes de impresión que ya generaste antes (los que tienen la hoja "Hoja1"
+            con el encabezado de expediente y la columna Pecosa). Puedes seleccionar varios archivos a la vez.
+            La app detecta sola el/los expediente(s) de cada archivo, crea las pecosas y bienes que falten,
+            y no duplica nada que ya esté cargado (compara por código patrimonial).
+            Las pecosas nuevas quedan marcadas como <strong>"Sticker generado"</strong> — tú las marcas
+            como firmadas después, igual que las demás, en <a href="/pecosas">Pecosas</a>.
+        </p>
+        <form method="post" action="/carga-inicial/procesar" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label class="form-label">Reportes de impresión (Excel, puedes elegir varios)</label>
+                <input type="file" name="archivos" class="form-control" multiple required>
+            </div>
+            <button type="submit" class="btn btn-primary">Procesar carga inicial</button>
+        </form>
+    </div>
+</div>
+
+{% if resultado %}
+<div class="alert alert-success">
+    Total: {{ resultado.total_pecosas_nuevas }} pecosa(s) nueva(s), {{ resultado.total_bienes_nuevos }} bien(es) nuevo(s) creado(s),
+    {{ resultado.total_bienes_omitidos }} bien(es) omitido(s) por ya estar cargado(s) antes.
+</div>
+
+{% if resultado.establecimientos_sin_match %}
+<div class="alert alert-warning">
+    ⚠️ Estos establecimientos no coincidieron con ningún centro de costo de tu maestro (quedaron sin
+    IPRESS asignado en los bienes que los usan) — revísalos en <a href="/maestros">Maestros</a>:
+    <strong>{{ resultado.establecimientos_sin_match|join(", ") }}</strong>
+</div>
+{% endif %}
+
+<table class="table table-sm bg-white">
+    <thead><tr><th>Archivo</th><th>Expediente detectado</th><th>Pecosas nuevas</th><th>Bienes nuevos</th><th>Bienes omitidos</th></tr></thead>
+    <tbody>
+    {% for r in resultado.archivos %}
+        <tr class="{{ 'table-danger' if r.error else '' }}">
+            <td>{{ r.archivo }}</td>
+            {% if r.error %}
+                <td colspan="4">Error: {{ r.error }}</td>
+            {% else %}
+                <td>{{ r.expediente }}</td>
+                <td>{{ r.pecosas_nuevas }}</td>
+                <td>{{ r.bienes_nuevos }}</td>
+                <td>{{ r.bienes_omitidos }}</td>
+            {% endif %}
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

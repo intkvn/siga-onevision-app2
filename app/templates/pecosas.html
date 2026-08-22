@@ -12,6 +12,35 @@
 
 <div class="card mb-4">
     <div class="card-body">
+        <h5 class="card-title">Buscar</h5>
+        <form method="get" action="/pecosas" class="row g-2">
+            <div class="col-auto">
+                <input type="text" name="numero" value="{{ filtros.numero }}" class="form-control form-control-sm" placeholder="N° pecosa">
+            </div>
+            <div class="col-auto">
+                <input type="text" name="expediente" value="{{ filtros.expediente }}" class="form-control form-control-sm" placeholder="N° expediente">
+            </div>
+            <div class="col-auto">
+                <select name="estado" class="form-select form-select-sm">
+                    <option value="">Todos los estados</option>
+                    {% for e in estados %}
+                    <option value="{{ e }}" {{ "selected" if filtros.estado == e else "" }}>{{ e }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <input type="text" name="firmante" value="{{ filtros.firmante }}" class="form-control form-control-sm" placeholder="Firmante">
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-sm btn-primary">Buscar</button>
+                <a href="/pecosas" class="btn btn-sm btn-outline-secondary">Limpiar</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body">
         <h5 class="card-title">Registrar pecosas de un expediente</h5>
         <p class="text-muted">Escribe el número de expediente una sola vez, y pega abajo todos los números de pecosa que traiga (uno por línea, o separados por coma). Los que ya existan no se duplican.</p>
         <form method="post" action="/pecosas/nuevas-multiples">

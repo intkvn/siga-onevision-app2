@@ -5,6 +5,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
+from sqlalchemy import desc, or_
+
 from app.database import get_db
 from app.models import Pecosa, Expediente, Persona
 from app.auth import requiere_login
@@ -12,13 +14,38 @@ from app.auth import requiere_login
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
+ESTADOS_PECOSA = ["Recibida", "Normalizada", "StickerGenerado", "Firmada"]
+
 
 @router.get("/pecosas", response_class=HTMLResponse)
-def listar_pecosas(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
-    pecosas = db.query(Pecosa).order_by(desc(Pecosa.creado_en)).all()
+def listar_pecosas(
+    request: Request,
+    numero: str = "",
+    expediente: str = "",
+    estado: str = "",
+    firmante: str = "",
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    consulta = db.query(Pecosa).join(Expediente, isouter=True)
+    if numero:
+        consulta = consulta.filter(Pecosa.numero.ilike(f"%{numero.strip()}%"))
+    if expediente:
+        consulta = consulta.filter(Expediente.numero.ilike(f"%{expediente.strip()}%"))
+    if estado:
+        consulta = consulta.filter(Pecosa.estado == estado)
+    if firmante:
+        consulta = consulta.filter(Pecosa.firmante.ilike(f"%{firmante.strip()}%"))
+
+    pecosas = consulta.order_by(desc(Pecosa.creado_en)).all()
     personas = db.query(Persona).order_by(Persona.nombre_completo).all()
     return templates.TemplateResponse(
-        "pecosas.html", {"request": request, "pecosas": pecosas, "personas": personas}
+        "pecosas.html",
+        {
+            "request": request, "pecosas": pecosas, "personas": personas,
+            "estados": ESTADOS_PECOSA,
+            "filtros": {"numero": numero, "expediente": expediente, "estado": estado, "firmante": firmante},
+        },
     )
 
 

@@ -75,16 +75,30 @@ def _calcular_control(db: Session) -> list[dict]:
 
 
 @router.get("/control", response_class=HTMLResponse)
-def ver_control(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
+def ver_control(
+    request: Request,
+    numero: str = "",
+    estado: str = "",
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
     filas = _calcular_control(db)
     resumen = defaultdict(int)
     for f in filas:
         resumen[f["estado"]] += 1
+
+    filas_filtradas = filas
+    if numero:
+        filas_filtradas = [f for f in filas_filtradas if numero.strip() in f["nro_pecosa"]]
+    if estado:
+        filas_filtradas = [f for f in filas_filtradas if f["estado"] == estado]
+
     return templates.TemplateResponse(
         "control.html",
         {
-            "request": request, "filas": filas, "resumen": resumen,
+            "request": request, "filas": filas_filtradas, "hay_datos": bool(filas), "resumen": resumen,
             "estados": [ESTADO_PENDIENTE_ALMACEN, ESTADO_PARCIAL, ESTADO_FALTA_FIRMA, ESTADO_COMPLETA],
+            "filtros": {"numero": numero, "estado": estado},
         },
     )
 

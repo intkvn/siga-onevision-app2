@@ -88,6 +88,13 @@ async def procesar_carga_inicial(
                 continue
             if codigo_patrimonial in codigos_ya_cargados:
                 bienes_omitidos_archivo += 1
+                bien_existente = (
+                    db.query(BienAlta).filter(BienAlta.codigo_patrimonial == codigo_patrimonial).first()
+                )
+                if bien_existente and bien_existente.lote_id:
+                    lote_existente = db.query(LoteCarga).get(bien_existente.lote_id)
+                    if lote_existente and not lote_existente.origen_lote:
+                        lote_existente.origen_lote = valor_lote
                 continue
 
             expediente = expedientes_cache.get(numero_expediente)
@@ -112,7 +119,7 @@ async def procesar_carga_inicial(
             clave_lote = (nombre_archivo, valor_lote)
             lote = lotes_del_archivo.get(clave_lote)
             if lote is None:
-                lote = LoteCarga(anio="", ejecutora="")
+                lote = LoteCarga(anio="", ejecutora="", origen_lote=valor_lote)
                 db.add(lote)
                 db.flush()
                 lotes_del_archivo[clave_lote] = lote

@@ -37,12 +37,11 @@
 
 <h5>Lotes recientes ({{ lotes|length }})</h5>
 <table class="table table-sm bg-white">
-    <thead><tr><th>ID</th><th>Lote real (hist.)</th><th>Fecha</th><th>Expedientes</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr><th>ID (N° lote)</th><th>Fecha</th><th>Expedientes</th><th>Estado</th><th></th></tr></thead>
     <tbody>
     {% for item in lotes %}
         <tr>
             <td>{{ item.lote.id }}</td>
-            <td>{{ item.lote.origen_lote or "-" }}</td>
             <td>{{ item.lote.fecha.strftime("%Y-%m-%d %H:%M") }}</td>
             <td>{{ item.expedientes|join(", ") if item.expedientes else "-" }}</td>
             <td>

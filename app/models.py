@@ -77,6 +77,7 @@ class LoteCarga(Base):
     ejecutora = Column(String(10), nullable=False)
     archivo_generado = Column(String(300), nullable=True)
     pecosas_solicitadas = Column(Text, nullable=True)  # CSV de números de pecosa elegidos al procesar
+    origen_lote = Column(String(20), nullable=True)  # N° de lote original, solo para lotes de la Carga Inicial
 
     bienes = relationship("BienAlta", back_populates="lote")
 

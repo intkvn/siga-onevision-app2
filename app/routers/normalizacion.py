@@ -33,7 +33,7 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
             continue
         expedientes.setdefault(exp.numero, []).append(p.numero)
 
-    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(10).all()
+    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
     lotes = [_resumen_lote(db, lote) for lote in lotes_query]
     return templates.TemplateResponse(
         "normalizacion.html",

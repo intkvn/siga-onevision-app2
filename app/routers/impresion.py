@@ -23,7 +23,7 @@ ENCABEZADOS_IMPRESION = [
 
 @router.get("/impresion", response_class=HTMLResponse)
 def formulario_impresion(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
-    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).limit(15).all()
+    lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
     lotes = [_resumen_impresion_lote(db, lote) for lote in lotes_query]
     return templates.TemplateResponse("impresion.html", {"request": request, "lotes": lotes})
 

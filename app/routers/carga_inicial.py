@@ -4,6 +4,7 @@ import tempfile
 from fastapi import APIRouter, Request, Depends, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -50,6 +51,7 @@ async def procesar_carga_inicial(
 
     resumen_archivos = []
     establecimientos_sin_match = set()
+    lotes_con_id_no_numerico = set()
     total_pecosas_nuevas = 0
     total_bienes_nuevos = 0
     total_bienes_omitidos = 0
@@ -74,7 +76,7 @@ async def procesar_carga_inicial(
         pecosas_nuevas_archivo = 0
         bienes_nuevos_archivo = 0
         bienes_omitidos_archivo = 0
-        lotes_del_archivo = {}  # valor de "lote" tal como viene en el excel -> LoteCarga
+        lotes_del_archivo = {}  # id de lote (el número del excel) -> LoteCarga
 
         for _, fila in df.iterrows():
             numero_pecosa = extraer_numero_pecosa(fila.get("pecosa"))
@@ -88,13 +90,6 @@ async def procesar_carga_inicial(
                 continue
             if codigo_patrimonial in codigos_ya_cargados:
                 bienes_omitidos_archivo += 1
-                bien_existente = (
-                    db.query(BienAlta).filter(BienAlta.codigo_patrimonial == codigo_patrimonial).first()
-                )
-                if bien_existente and bien_existente.lote_id:
-                    lote_existente = db.query(LoteCarga).get(bien_existente.lote_id)
-                    if lote_existente and not lote_existente.origen_lote:
-                        lote_existente.origen_lote = valor_lote
                 continue
 
             expediente = expedientes_cache.get(numero_expediente)
@@ -114,15 +109,28 @@ async def procesar_carga_inicial(
             elif pecosa.estado in ESTADOS_QUE_SE_PUEDEN_SUBIR:
                 pecosa.estado = "StickerGenerado"
 
-            # cada "lote" del excel (agrupa varios expedientes/pecosas de una
-            # misma tanda de impresión) se convierte en un LoteCarga propio
-            clave_lote = (nombre_archivo, valor_lote)
-            lote = lotes_del_archivo.get(clave_lote)
-            if lote is None:
-                lote = LoteCarga(anio="", ejecutora="", origen_lote=valor_lote)
-                db.add(lote)
-                db.flush()
-                lotes_del_archivo[clave_lote] = lote
+            # El "lote" del excel se usa DIRECTAMENTE como ID del LoteCarga
+            # (no un ID interno aparte) — así el número que ves en la app
+            # es el mismo que llevas en tu control manual.
+            if valor_lote.isdigit():
+                id_lote = int(valor_lote)
+                lote = lotes_del_archivo.get(id_lote) or db.query(LoteCarga).get(id_lote)
+                if lote is None:
+                    lote = LoteCarga(id=id_lote, anio="", ejecutora="")
+                    db.add(lote)
+                    db.flush()
+                lotes_del_archivo[id_lote] = lote
+            else:
+                # Si el valor de "lote" no es un número limpio, no podemos
+                # usarlo como ID — se crea con un ID autogenerado normal.
+                lotes_con_id_no_numerico.add(valor_lote)
+                clave = ("SIN-NUMERO", valor_lote)
+                lote = lotes_del_archivo.get(clave)
+                if lote is None:
+                    lote = LoteCarga(anio="", ejecutora="")
+                    db.add(lote)
+                    db.flush()
+                lotes_del_archivo[clave] = lote
 
             establecimiento = str(fila.get("establecimiento", "") or "").strip()
             centro = centros_por_nombre.get(_normalizar(establecimiento))
@@ -151,7 +159,7 @@ async def procesar_carga_inicial(
         db.commit()
 
         # Ahora que ya existen los bienes, se completa pecosas_solicitadas
-        # de cada lote creado en este archivo (para que Normalización/
+        # de cada lote tocado en este archivo (para que Normalización/
         # Impresión lo muestren igual que a los lotes hechos desde la app).
         for lote in lotes_del_archivo.values():
             numeros = sorted({
@@ -174,6 +182,17 @@ async def procesar_carga_inicial(
         total_bienes_omitidos += bienes_omitidos_archivo
         total_lotes_creados += len(lotes_del_archivo)
 
+    # Como algunos lotes se crearon con un ID puesto a mano (el número de
+    # tu excel), hay que avisarle a Postgres cuál es el próximo ID libre
+    # para que los lotes normales (creados desde Normalización) no choquen
+    # con los números que acabas de importar.
+    if db.bind.dialect.name == "postgresql":
+        db.execute(text(
+            "SELECT setval(pg_get_serial_sequence('lotes_carga', 'id'), "
+            "COALESCE((SELECT MAX(id) FROM lotes_carga), 1))"
+        ))
+        db.commit()
+
     resultado = {
         "archivos": resumen_archivos,
         "total_lotes_creados": total_lotes_creados,
@@ -181,5 +200,6 @@ async def procesar_carga_inicial(
         "total_bienes_nuevos": total_bienes_nuevos,
         "total_bienes_omitidos": total_bienes_omitidos,
         "establecimientos_sin_match": sorted(establecimientos_sin_match),
+        "lotes_con_id_no_numerico": sorted(lotes_con_id_no_numerico),
     }
     return templates.TemplateResponse("carga_inicial.html", {"request": request, "resultado": resultado})

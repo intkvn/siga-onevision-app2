@@ -25,6 +25,9 @@ with engine.begin() as conn:
     conn.execute(text(
         "ALTER TABLE pecosas ADD COLUMN IF NOT EXISTS expediente_firma VARCHAR(50)"
     ))
+    conn.execute(text(
+        "ALTER TABLE lotes_carga ADD COLUMN IF NOT EXISTS origen_lote VARCHAR(20)"
+    ))
 
 app = FastAPI(title="SIGA → One Visión")
 

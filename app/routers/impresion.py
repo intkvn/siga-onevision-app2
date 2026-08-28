@@ -15,8 +15,12 @@ from app.services.lote_status import expedientes_de_lote
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
-ENCABEZADOS_IMPRESION = [
+ENCABEZADOS_BARTENDER = [
     "Codigo Patrimonial", "Codigo QR", "Ruta QR", "Bien", "Establecimiento",
+    "Marca", "Modelo", "Nro Serie", "Numero pecosa",
+]
+ENCABEZADOS_HOJA1 = [
+    "Codigo Patrimonial", "Codigo QR", "Bien", "Establecimiento",
     "Marca", "Modelo", "Nro Serie", "Numero pecosa",
 ]
 
@@ -136,26 +140,39 @@ def _generar_hoja_impresion(bienes, expedientes, ruta_salida):
 
     hoja_bt = libro.active
     hoja_bt.title = "BarTender"
-    hoja_bt.append(ENCABEZADOS_IMPRESION)
+    hoja_bt.append(ENCABEZADOS_BARTENDER)
     for bien in bienes:
-        hoja_bt.append(_fila_impresion(bien))
+        hoja_bt.append(_fila_bartender(bien))
 
     hoja1 = libro.create_sheet("Hoja 1")
     hoja1.cell(row=1, column=1, value=f"EXPEDIENTE(S): {';'.join(expedientes)}")
-    for col, titulo in enumerate(ENCABEZADOS_IMPRESION, start=1):
+    for col, titulo in enumerate(ENCABEZADOS_HOJA1, start=1):
         hoja1.cell(row=3, column=col, value=titulo)
     for fila_idx, bien in enumerate(bienes, start=4):
-        for col, valor in enumerate(_fila_impresion(bien), start=1):
+        for col, valor in enumerate(_fila_hoja1(bien), start=1):
             hoja1.cell(row=fila_idx, column=col, value=valor)
 
     libro.save(ruta_salida)
 
 
-def _fila_impresion(bien) -> list:
+def _fila_bartender(bien) -> list:
     return [
         bien.codigo_patrimonial,
         bien.codigo_qr or "",
         bien.ruta_qr or "",
+        bien.descripcion,
+        bien.centro_costo.nombre_depend if bien.centro_costo else "",
+        bien.marca or "",
+        bien.modelo or "",
+        bien.nro_serie or "",
+        bien.pecosa.numero if bien.pecosa else "",
+    ]
+
+
+def _fila_hoja1(bien) -> list:
+    return [
+        bien.codigo_patrimonial,
+        bien.codigo_qr or "",
         bien.descripcion,
         bien.centro_costo.nombre_depend if bien.centro_costo else "",
         bien.marca or "",

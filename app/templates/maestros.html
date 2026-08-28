@@ -27,6 +27,12 @@
         <div class="card mb-4">
             <div class="card-body">
                 <h5>Personas (responsables)</h5>
+                <form method="get" action="/maestros" class="d-flex gap-2 mb-3">
+                    <input type="hidden" name="buscar_centro" value="{{ buscar_centro }}">
+                    <input type="text" name="buscar_persona" value="{{ buscar_persona }}" class="form-control form-control-sm" placeholder="Buscar por nombre o DNI">
+                    <button class="btn btn-sm btn-outline-primary">Buscar</button>
+                    {% if buscar_persona %}<a href="/maestros?buscar_centro={{ buscar_centro }}" class="btn btn-sm btn-outline-secondary">Limpiar</a>{% endif %}
+                </form>
                 <form method="post" action="/maestros/personas/importar" enctype="multipart/form-data" class="mb-3">
                     <label class="form-label">Importar/actualizar desde usuarios_responsable.xlsx</label>
                     <input type="file" name="archivo" class="form-control" required>
@@ -67,6 +73,12 @@
         <div class="card mb-4">
             <div class="card-body">
                 <h5>Centros de costo</h5>
+                <form method="get" action="/maestros" class="d-flex gap-2 mb-3">
+                    <input type="hidden" name="buscar_persona" value="{{ buscar_persona }}">
+                    <input type="text" name="buscar_centro" value="{{ buscar_centro }}" class="form-control form-control-sm" placeholder="Buscar por nombre o IPRESS">
+                    <button class="btn btn-sm btn-outline-primary">Buscar</button>
+                    {% if buscar_centro %}<a href="/maestros?buscar_persona={{ buscar_persona }}" class="btn btn-sm btn-outline-secondary">Limpiar</a>{% endif %}
+                </form>
                 <form method="post" action="/maestros/centros/importar" enctype="multipart/form-data" class="mb-3">
                     <label class="form-label">Importar/actualizar desde CENTROS_DE_COSTO.xlsx</label>
                     <input type="file" name="archivo" class="form-control" required>

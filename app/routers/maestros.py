@@ -32,16 +32,38 @@ def _encontrar_columna(df: pd.DataFrame, exactas: list[str], contiene: list[str]
 
 
 @router.get("/maestros", response_class=HTMLResponse)
-def ver_maestros(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
-    personas = db.query(Persona).order_by(Persona.dni == "", Persona.nombre_completo).all()
-    centros = db.query(CentroCosto).order_by(CentroCosto.ipress == "", CentroCosto.nombre_depend).all()
-    incompletas_p = sum(1 for p in personas if not p.dni)
-    incompletos_c = sum(1 for c in centros if not c.ipress)
+def ver_maestros(
+    request: Request,
+    buscar_persona: str = "",
+    buscar_centro: str = "",
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    incompletas_p = db.query(Persona).filter(Persona.dni == "").count()
+    incompletos_c = db.query(CentroCosto).filter(CentroCosto.ipress == "").count()
+
+    consulta_personas = db.query(Persona)
+    if buscar_persona:
+        termino = f"%{buscar_persona.strip()}%"
+        consulta_personas = consulta_personas.filter(
+            (Persona.nombre_completo.ilike(termino)) | (Persona.dni.ilike(termino))
+        )
+    personas = consulta_personas.order_by(Persona.dni == "", Persona.nombre_completo).all()
+
+    consulta_centros = db.query(CentroCosto)
+    if buscar_centro:
+        termino = f"%{buscar_centro.strip()}%"
+        consulta_centros = consulta_centros.filter(
+            (CentroCosto.nombre_depend.ilike(termino)) | (CentroCosto.ipress.ilike(termino))
+        )
+    centros = consulta_centros.order_by(CentroCosto.ipress == "", CentroCosto.nombre_depend).all()
+
     return templates.TemplateResponse(
         "maestros.html",
         {
             "request": request, "personas": personas, "centros": centros,
             "incompletas_p": incompletas_p, "incompletos_c": incompletos_c,
+            "buscar_persona": buscar_persona, "buscar_centro": buscar_centro,
         },
     )
 

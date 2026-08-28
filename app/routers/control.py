@@ -69,8 +69,10 @@ def _calcular_control(db: Session) -> list[dict]:
             "lineas": lineas,
         })
 
-    orden_estado = {ESTADO_PENDIENTE_ALMACEN: 0, ESTADO_PARCIAL: 1, ESTADO_FALTA_FIRMA: 2, ESTADO_COMPLETA: 3}
-    filas.sort(key=lambda f: (orden_estado.get(f["estado"], 9), f["nro_pecosa"]))
+    def _numero_para_orden(nro_pecosa: str) -> int:
+        return int(nro_pecosa) if nro_pecosa.isdigit() else -1
+
+    filas.sort(key=lambda f: _numero_para_orden(f["nro_pecosa"]), reverse=True)
     return filas
 
 

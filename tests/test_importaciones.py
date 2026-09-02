@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
-    Persona, RelacionPecosaItem,
+    LoteCarga, Persona, RelacionPecosaItem,
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import ESTADO_EXCESO, _calcular_control, _mover_bien_a_pecosa
@@ -48,12 +48,15 @@ class CorreccionPecosaTest(unittest.TestCase):
         expediente_destino = Expediente(numero="43613")
         self.db.add_all([expediente_origen, expediente_destino])
         self.db.flush()
+        lote = LoteCarga(id=14, anio="2026", ejecutora="785", pecosas_solicitadas="2011")
+        self.db.add(lote)
         self.origen = Pecosa(numero="2011", expediente_id=expediente_origen.id, estado="StickerGenerado")
         self.destino = Pecosa(numero="2473", expediente_id=expediente_destino.id)
         self.db.add_all([self.origen, self.destino])
         self.db.flush()
         self.bien_corregido = BienAlta(
             pecosa_id=self.origen.id,
+            lote_id=14,
             codigo_patrimonial="536498312255",
             descripcion="TERMO PARA TRANSPORTE DE BIOLOGICOS Y VACUNAS",
             codigo_qr="695614",
@@ -61,6 +64,7 @@ class CorreccionPecosaTest(unittest.TestCase):
         self.db.add_all([
             BienAlta(
                 pecosa_id=self.origen.id,
+                lote_id=14,
                 codigo_patrimonial="536498312210",
                 descripcion="TERMO PARA TRANSPORTE DE BIOLOGICOS Y VACUNAS",
                 codigo_qr="695613",
@@ -77,6 +81,7 @@ class CorreccionPecosaTest(unittest.TestCase):
         control_inicial = {fila["nro_pecosa"]: fila for fila in _calcular_control(self.db)}
         self.assertEqual(control_inicial["2011"]["estado"], ESTADO_EXCESO)
         self.assertEqual(control_inicial["2011"]["cantidad_ingresada"], 2)
+        self.assertEqual(control_inicial["2011"]["lotes"], [14])
 
         _mover_bien_a_pecosa(
             self.db, self.bien_corregido, self.destino,
@@ -85,10 +90,12 @@ class CorreccionPecosaTest(unittest.TestCase):
         self.db.commit()
 
         self.assertEqual(self.bien_corregido.pecosa_id, self.destino.id)
+        self.assertEqual(self.destino.estado, "StickerGenerado")
         historial = self.db.query(CorreccionAsignacionBien).one()
         self.assertEqual(historial.pecosa_origen_id, self.origen.id)
         self.assertEqual(historial.pecosa_destino_id, self.destino.id)
         self.assertEqual(historial.motivo, "SIGA MP corrigió la pecosa asignada al bien.")
+        self.assertIn("2473", self.db.query(LoteCarga).get(14).pecosas_solicitadas.split(","))
 
         control_final = {fila["nro_pecosa"]: fila for fila in _calcular_control(self.db)}
         self.assertEqual(control_final["2011"]["cantidad_ingresada"], 1)

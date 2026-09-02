@@ -39,10 +39,11 @@ def _calcular_control(db: Session) -> list[dict]:
         cantidad_esperada = sum(l.cant_aprobada or 0 for l in lineas)
         pecosa = pecosas_db.get(nro_pecosa)
         cantidad_ingresada = 0
+        lotes = []
         if pecosa:
-            cantidad_ingresada = (
-                db.query(BienAlta).filter(BienAlta.pecosa_id == pecosa.id).count()
-            )
+            bienes_pecosa = db.query(BienAlta).filter(BienAlta.pecosa_id == pecosa.id).all()
+            cantidad_ingresada = len(bienes_pecosa)
+            lotes = sorted({bien.lote_id for bien in bienes_pecosa if bien.lote_id is not None})
 
         if pecosa is None:
             estado = ESTADO_PENDIENTE_ALMACEN
@@ -61,6 +62,7 @@ def _calcular_control(db: Session) -> list[dict]:
             "ano_eje": primera.ano_eje,
             "nombre_depend": primera.nombre_depend,
             "fecha_pecosa": primera.fecha_pecosa,
+            "lotes": lotes,
             "motivo_pedido": primera.motivo_pedido,
             "cantidad_esperada": cantidad_esperada,
             "cantidad_ingresada": cantidad_ingresada,
@@ -193,8 +195,30 @@ def _mover_bien_a_pecosa(
         motivo=motivo.strip(),
     )
     bien.pecosa_id = pecosa_destino.id
+    _sincronizar_pecosa_corregida(bien, pecosa_destino)
     db.add(correccion)
     return correccion
+
+
+def _sincronizar_pecosa_corregida(bien: BienAlta, pecosa_destino: Pecosa) -> None:
+    """Mantiene el estado y el lote de una pecosa que recibe un bien ya procesado.
+
+    El bien conserva su lote. La pecosa de destino se incorpora a ese mismo
+    lote para que su expediente figure en el historial y no vuelva a aparecer
+    como pendiente de normalización.
+    """
+    if bien.codigo_qr and pecosa_destino.estado in ("Recibida", "Normalizada"):
+        pecosa_destino.estado = "StickerGenerado"
+    elif bien.lote_id and pecosa_destino.estado == "Recibida":
+        pecosa_destino.estado = "Normalizada"
+
+    lote = bien.lote
+    if lote is None:
+        return
+    pecosas_lote = [numero for numero in (lote.pecosas_solicitadas or "").split(",") if numero]
+    if pecosa_destino.numero not in pecosas_lote:
+        pecosas_lote.append(pecosa_destino.numero)
+        lote.pecosas_solicitadas = ",".join(pecosas_lote)
 
 
 @router.get("/control/pecosa/{pecosa_id}/corregir", response_class=HTMLResponse)

@@ -68,7 +68,7 @@
 <table class="table table-sm bg-white">
     <thead>
         <tr>
-            <th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th>
+            <th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th><th>Lote</th>
             <th>Esperada</th><th>Ingresada</th><th>Estado</th>
             <th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th><th></th>
         </tr>
@@ -79,6 +79,7 @@
             <td>{{ f.nro_pecosa }}</td>
             <td>{{ f.nombre_depend }}</td>
             <td>{{ f.fecha_pecosa }}</td>
+            <td>{{ f.lotes|join(", ") if f.lotes else "-" }}</td>
             <td>{{ f.cantidad_esperada }}</td>
             <td>{{ f.cantidad_ingresada }}</td>
             <td>

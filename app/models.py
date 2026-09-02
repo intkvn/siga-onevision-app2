@@ -135,3 +135,23 @@ class BienAlta(Base):
     lote = relationship("LoteCarga", back_populates="bienes")
     persona = relationship("Persona")
     centro_costo = relationship("CentroCosto")
+
+
+class CorreccionAsignacionBien(Base):
+    """Historial de los traslados de un bien entre pecosas.
+
+    Se conserva para que una corrección posterior no oculte el origen del
+    bien ni el motivo documentado por Patrimonio.
+    """
+    __tablename__ = "correcciones_asignacion_bienes"
+
+    id = Column(Integer, primary_key=True)
+    bien_id = Column(Integer, ForeignKey("bienes_alta.id"), nullable=False, index=True)
+    pecosa_origen_id = Column(Integer, ForeignKey("pecosas.id"), nullable=False)
+    pecosa_destino_id = Column(Integer, ForeignKey("pecosas.id"), nullable=False)
+    motivo = Column(String(500), nullable=False)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bien = relationship("BienAlta")
+    pecosa_origen = relationship("Pecosa", foreign_keys=[pecosa_origen_id])
+    pecosa_destino = relationship("Pecosa", foreign_keys=[pecosa_destino_id])

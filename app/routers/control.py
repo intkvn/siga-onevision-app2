@@ -2,14 +2,14 @@ import os
 import tempfile
 from collections import defaultdict
 
-from fastapi import APIRouter, Request, Depends, UploadFile, File
+from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from openpyxl import Workbook
 
 from app.database import get_db
-from app.models import RelacionPecosaItem, Pecosa, BienAlta
+from app.models import RelacionPecosaItem, Pecosa, BienAlta, CorreccionAsignacionBien
 from app.auth import requiere_login
 from app.services.excel_relacion_pecosas import leer_relacion_pecosas
 
@@ -18,6 +18,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 ESTADO_PENDIENTE_ALMACEN = "Pendiente envío almacén"
 ESTADO_PARCIAL = "Ingresada parcial en SIGA"
+ESTADO_EXCESO = "Inconsistencia: bienes de más"
 ESTADO_FALTA_FIRMA = "Ingresado a SIGA y OVC (falta firma)"
 ESTADO_COMPLETA = "Firmada/Completa"
 
@@ -45,6 +46,8 @@ def _calcular_control(db: Session) -> list[dict]:
 
         if pecosa is None:
             estado = ESTADO_PENDIENTE_ALMACEN
+        elif cantidad_ingresada > cantidad_esperada:
+            estado = ESTADO_EXCESO
         elif cantidad_ingresada < cantidad_esperada:
             estado = ESTADO_PARCIAL
         elif pecosa.estado != "Firmada":
@@ -85,6 +88,7 @@ def ver_control(
     _=Depends(requiere_login),
 ):
     filas = _calcular_control(db)
+    pecosas_db = {p.numero: p for p in db.query(Pecosa).all()}
     resumen = defaultdict(int)
     for f in filas:
         resumen[f["estado"]] += 1
@@ -99,7 +103,11 @@ def ver_control(
         "control.html",
         {
             "request": request, "filas": filas_filtradas, "hay_datos": bool(filas), "resumen": resumen,
-            "estados": [ESTADO_PENDIENTE_ALMACEN, ESTADO_PARCIAL, ESTADO_FALTA_FIRMA, ESTADO_COMPLETA],
+            "pecosas_db": pecosas_db,
+            "estados": [
+                ESTADO_PENDIENTE_ALMACEN, ESTADO_PARCIAL, ESTADO_EXCESO,
+                ESTADO_FALTA_FIRMA, ESTADO_COMPLETA,
+            ],
             "filtros": {"numero": numero, "estado": estado},
         },
     )
@@ -157,6 +165,121 @@ async def importar_relacion_pecosas(
         ))
     db.commit()
     return RedirectResponse(url="/control", status_code=303)
+
+
+def _cantidad_esperada(db: Session, numero_pecosa: str) -> int:
+    return sum(
+        item.cant_aprobada or 0
+        for item in db.query(RelacionPecosaItem).filter(
+            RelacionPecosaItem.nro_pecosa == numero_pecosa
+        ).all()
+    )
+
+
+def _mover_bien_a_pecosa(
+    db: Session, bien: BienAlta, pecosa_destino: Pecosa, motivo: str
+) -> CorreccionAsignacionBien:
+    """Traslada un bien conservando sus demás datos y registrando el cambio."""
+    pecosa_origen = bien.pecosa
+    if pecosa_origen is None:
+        raise ValueError("El bien no tiene una pecosa de origen.")
+    if pecosa_origen.id == pecosa_destino.id:
+        raise ValueError("La pecosa de destino debe ser diferente de la pecosa de origen.")
+
+    correccion = CorreccionAsignacionBien(
+        bien_id=bien.id,
+        pecosa_origen_id=pecosa_origen.id,
+        pecosa_destino_id=pecosa_destino.id,
+        motivo=motivo.strip(),
+    )
+    bien.pecosa_id = pecosa_destino.id
+    db.add(correccion)
+    return correccion
+
+
+@router.get("/control/pecosa/{pecosa_id}/corregir", response_class=HTMLResponse)
+def formulario_corregir_asignacion(
+    pecosa_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    pecosa = db.query(Pecosa).get(pecosa_id)
+    if pecosa is None:
+        return RedirectResponse(url="/control?error=Pecosa+no+encontrada", status_code=303)
+
+    esperada = _cantidad_esperada(db, pecosa.numero)
+    bienes = db.query(BienAlta).filter(BienAlta.pecosa_id == pecosa.id).order_by(BienAlta.id).all()
+    if len(bienes) <= esperada:
+        return RedirectResponse(
+            url="/control?error=Esta+pecosa+ya+no+tiene+bienes+de+m%C3%A1s+por+corregir",
+            status_code=303,
+        )
+
+    historial = db.query(CorreccionAsignacionBien).filter(
+        CorreccionAsignacionBien.pecosa_origen_id == pecosa.id
+    ).order_by(CorreccionAsignacionBien.creado_en.desc()).all()
+    return templates.TemplateResponse(
+        "control_corregir_pecosa.html",
+        {
+            "request": request,
+            "pecosa": pecosa,
+            "bienes": bienes,
+            "cantidad_esperada": esperada,
+            "historial": historial,
+        },
+    )
+
+
+@router.post("/control/bien/{bien_id}/reasignar-pecosa")
+def reasignar_bien_a_pecosa(
+    bien_id: int,
+    numero_pecosa_destino: str = Form(...),
+    motivo: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    bien = db.query(BienAlta).get(bien_id)
+    if bien is None or bien.pecosa is None:
+        return RedirectResponse(url="/control?error=Bien+no+encontrado", status_code=303)
+
+    pecosa_origen = bien.pecosa
+    esperada = _cantidad_esperada(db, pecosa_origen.numero)
+    ingresada = db.query(BienAlta).filter(BienAlta.pecosa_id == pecosa_origen.id).count()
+    if ingresada <= esperada:
+        return RedirectResponse(
+            url=f"/control?error=La+pecosa+{pecosa_origen.numero}+ya+no+tiene+un+exceso+que+corregir",
+            status_code=303,
+        )
+
+    destino_numero = numero_pecosa_destino.strip()
+    if not destino_numero or not motivo.strip():
+        return RedirectResponse(
+            url=f"/control/pecosa/{pecosa_origen.id}/corregir?error=Indica+la+pecosa+de+destino+y+el+motivo",
+            status_code=303,
+        )
+    pecosa_destino = db.query(Pecosa).filter(Pecosa.numero == destino_numero).first()
+    if pecosa_destino is None:
+        return RedirectResponse(
+            url=f"/control/pecosa/{pecosa_origen.id}/corregir?error=La+pecosa+{destino_numero}+no+est%C3%A1+registrada.+Reg%C3%ADstrala+primero+en+Pecosas",
+            status_code=303,
+        )
+
+    try:
+        _mover_bien_a_pecosa(db, bien, pecosa_destino, motivo)
+    except ValueError as error:
+        return RedirectResponse(
+            url=f"/control/pecosa/{pecosa_origen.id}/corregir?error={error}", status_code=303
+        )
+
+    db.commit()
+    return RedirectResponse(
+        url=(
+            f"/control?info=Se+movió+el+bien+{bien.codigo_patrimonial}+de+la+pecosa+"
+            f"{pecosa_origen.numero}+a+la+pecosa+{pecosa_destino.numero}"
+        ),
+        status_code=303,
+    )
 
 
 def _normalizar_texto(t) -> str:

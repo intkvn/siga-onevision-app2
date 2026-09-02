@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block titulo %}Corregir pecosa {{ pecosa.numero }}{% endblock %}
+{% block contenido %}
+<h3 class="mb-3">Corregir asignación de bienes</h3>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+
+<div class="alert alert-warning">
+    La pecosa <strong>{{ pecosa.numero }}</strong> del expediente
+    <strong>{{ pecosa.expediente.numero }}</strong> tiene {{ bienes|length }} bienes registrados,
+    pero la Relación de Pecosas espera {{ cantidad_esperada }}.
+    Mueve únicamente el bien que SIGA MP haya corregido a otra pecosa ya registrada.
+</div>
+
+<p class="text-muted">
+    El traslado conserva código patrimonial, QR, lote, descripción y demás datos del bien.
+    Solo cambia la pecosa asignada y queda registrado en el historial.
+</p>
+
+<table class="table table-sm bg-white">
+    <thead>
+        <tr>
+            <th>Código patrimonial</th><th>Bien</th><th>QR</th><th>Destino</th><th>Motivo</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for bien in bienes %}
+        <tr>
+            <td>{{ bien.codigo_patrimonial }}</td>
+            <td>{{ bien.descripcion }}</td>
+            <td>{{ bien.codigo_qr or "-" }}</td>
+            <td>
+                <input form="mover-{{ bien.id }}" name="numero_pecosa_destino" class="form-control form-control-sm" placeholder="N° pecosa destino" required>
+            </td>
+            <td><input form="mover-{{ bien.id }}" name="motivo" class="form-control form-control-sm" placeholder="Motivo de la corrección" required></td>
+            <td>
+                <form id="mover-{{ bien.id }}" method="post" action="/control/bien/{{ bien.id }}/reasignar-pecosa">
+                    <button class="btn btn-sm btn-danger">Mover bien</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% if historial %}
+<h5 class="mt-4">Historial de correcciones de esta pecosa</h5>
+<table class="table table-sm bg-white">
+    <thead><tr><th>Fecha</th><th>Bien</th><th>Pecosa destino</th><th>Motivo</th></tr></thead>
+    <tbody>
+    {% for correccion in historial %}
+        <tr>
+            <td>{{ correccion.creado_en }}</td>
+            <td>{{ correccion.bien.codigo_patrimonial }}</td>
+            <td>{{ correccion.pecosa_destino.numero }}</td>
+            <td>{{ correccion.motivo }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<a href="/control" class="btn btn-outline-secondary">Volver a Control General</a>
+{% endblock %}

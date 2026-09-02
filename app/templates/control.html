@@ -6,6 +6,9 @@
 {% if request.query_params.get("error") %}
 <div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
 {% endif %}
+{% if request.query_params.get("info") %}
+<div class="alert alert-success">{{ request.query_params.get("info") }}</div>
+{% endif %}
 
 <div class="card mb-4">
     <div class="card-body">
@@ -47,7 +50,7 @@
 
 <div class="row mb-4">
     {% for estado in estados %}
-    <div class="col-md-3">
+    <div class="col-md">
         <div class="card text-center">
             <div class="card-body">
                 <div class="fs-3">{{ resumen.get(estado, 0) }}</div>
@@ -67,7 +70,7 @@
         <tr>
             <th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th>
             <th>Esperada</th><th>Ingresada</th><th>Estado</th>
-            <th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th>
+            <th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th><th></th>
         </tr>
     </thead>
     <tbody>
@@ -81,6 +84,7 @@
             <td>
                 {% if f.estado == "Pendiente envío almacén" %}<span class="badge bg-secondary">{{ f.estado }}</span>
                 {% elif f.estado == "Ingresada parcial en SIGA" %}<span class="badge bg-warning text-dark">{{ f.estado }}</span>
+                {% elif f.estado == "Inconsistencia: bienes de más" %}<span class="badge bg-danger">{{ f.estado }} ({{ f.cantidad_ingresada }} de {{ f.cantidad_esperada }})</span>
                 {% elif f.estado == "Ingresado a SIGA y OVC (falta firma)" %}<span class="badge bg-primary">{{ f.estado }}</span>
                 {% else %}<span class="badge bg-success">{{ f.estado }}</span>
                 {% endif %}
@@ -88,6 +92,11 @@
             <td>{{ f.firmante or "-" }}</td>
             <td>{{ f.expediente_alta or "-" }}</td>
             <td>{{ f.expediente_firma or "-" }}</td>
+            <td>
+                {% if f.estado == "Inconsistencia: bienes de más" and f.nro_pecosa in pecosas_db %}
+                <a class="btn btn-sm btn-outline-danger" href="/control/pecosa/{{ pecosas_db[f.nro_pecosa].id }}/corregir">Corregir asignación</a>
+                {% endif %}
+            </td>
         </tr>
     {% endfor %}
     </tbody>

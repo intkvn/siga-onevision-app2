@@ -1,6 +1,7 @@
 import os
 import tempfile
 from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -123,7 +124,7 @@ def descargar_impresion(lote_id: int, db: Session = Depends(get_db), _=Depends(r
     # .xlsx (no .xls) porque BarTender no acepta el formato binario antiguo.
     nombre_archivo = f"impresion_stickers_lote_{lote_id}.xlsx"
     ruta_salida = os.path.join(tempfile.gettempdir(), nombre_archivo)
-    _generar_hoja_impresion(bienes, expedientes, ruta_salida)
+    _generar_hoja_impresion(bienes, expedientes, lote_id, ruta_salida)
 
     return FileResponse(
         ruta_salida,
@@ -132,7 +133,7 @@ def descargar_impresion(lote_id: int, db: Session = Depends(get_db), _=Depends(r
     )
 
 
-def _generar_hoja_impresion(bienes, expedientes, ruta_salida):
+def _generar_hoja_impresion(bienes, expedientes, lote_id, ruta_salida):
     """Genera el .xlsx con: hoja 'BarTender' (datos limpios para imprimir el
     sticker) y 'Hoja 1' (listado con encabezado de expedientes, para el
     responsable de pegar los stickers)."""
@@ -146,11 +147,45 @@ def _generar_hoja_impresion(bienes, expedientes, ruta_salida):
 
     hoja1 = libro.create_sheet("Hoja 1")
     hoja1.cell(row=1, column=1, value=f"EXPEDIENTE(S): {';'.join(expedientes)}")
+    hoja1.cell(row=2, column=1, value=f"LOTE: {lote_id}")
+    hoja1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(ENCABEZADOS_HOJA1))
+    hoja1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(ENCABEZADOS_HOJA1))
+    hoja1["A1"].font = Font(bold=True, size=12)
+    hoja1["A2"].font = Font(bold=True, size=12)
+
     for col, titulo in enumerate(ENCABEZADOS_HOJA1, start=1):
-        hoja1.cell(row=3, column=col, value=titulo)
-    for fila_idx, bien in enumerate(bienes, start=4):
+        celda = hoja1.cell(row=4, column=col, value=titulo)
+        celda.font = Font(bold=True, color="FFFFFF")
+        celda.fill = PatternFill("solid", fgColor="1F4E78")
+        celda.alignment = Alignment(horizontal="center", vertical="center")
+
+    borde_fino = Side(style="thin", color="A6A6A6")
+    borde_tabla = Border(
+        left=borde_fino, right=borde_fino, top=borde_fino, bottom=borde_fino
+    )
+    for fila_idx, bien in enumerate(bienes, start=5):
         for col, valor in enumerate(_fila_hoja1(bien), start=1):
-            hoja1.cell(row=fila_idx, column=col, value=valor)
+            celda = hoja1.cell(row=fila_idx, column=col, value=valor)
+            celda.border = borde_tabla
+            celda.alignment = Alignment(vertical="top")
+            if col in (1, 2, 8):
+                celda.number_format = "@"
+
+    for celda in hoja1[4]:
+        celda.border = borde_tabla
+
+    anchos = [22, 18, 42, 32, 18, 18, 20, 18]
+    for col, ancho in enumerate(anchos, start=1):
+        hoja1.column_dimensions[hoja1.cell(row=4, column=col).column_letter].width = ancho
+
+    hoja1.auto_filter.ref = f"A4:{hoja1.cell(row=4, column=len(ENCABEZADOS_HOJA1)).column_letter}{max(4, hoja1.max_row)}"
+    hoja1.freeze_panes = "A5"
+    hoja1.sheet_view.showGridLines = False
+    hoja1.page_setup.orientation = "landscape"
+    hoja1.page_setup.fitToWidth = 1
+    hoja1.page_setup.fitToHeight = 0
+    hoja1.sheet_properties.pageSetUpPr.fitToPage = True
+    hoja1.print_title_rows = "1:4"
 
     libro.save(ruta_salida)
 

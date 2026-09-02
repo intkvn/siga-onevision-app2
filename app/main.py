@@ -15,19 +15,21 @@ from app.models import Pecosa, RelacionPecosaItem  # noqa: F401  (necesario para
 # esto es más simple que manejar migraciones)
 Base.metadata.create_all(bind=engine)
 
-# create_all NO agrega columnas nuevas a tablas que ya existen — así que las
-# columnas que se sumen después de la primera vez se agregan aquí a mano,
-# de forma segura (no hace nada si la columna ya existe).
-with engine.begin() as conn:
-    conn.execute(text(
-        "ALTER TABLE lotes_carga ADD COLUMN IF NOT EXISTS pecosas_solicitadas TEXT"
-    ))
-    conn.execute(text(
-        "ALTER TABLE pecosas ADD COLUMN IF NOT EXISTS expediente_firma VARCHAR(50)"
-    ))
-    conn.execute(text(
-        "ALTER TABLE lotes_carga DROP COLUMN IF EXISTS origen_lote"
-    ))
+# create_all NO agrega columnas nuevas a tablas que ya existen. En PostgreSQL,
+# las columnas que se sumen después de la primera vez se agregan aquí a mano,
+# de forma segura (no hace nada si la columna ya existe). SQLite omite estas
+# instrucciones porque no admite esta sintaxis de ALTER TABLE.
+if engine.dialect.name == "postgresql":
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE lotes_carga ADD COLUMN IF NOT EXISTS pecosas_solicitadas TEXT"
+        ))
+        conn.execute(text(
+            "ALTER TABLE pecosas ADD COLUMN IF NOT EXISTS expediente_firma VARCHAR(50)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE lotes_carga DROP COLUMN IF EXISTS origen_lote"
+        ))
 
 app = FastAPI(title="SIGA → One Visión")
 

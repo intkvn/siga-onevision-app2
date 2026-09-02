@@ -112,13 +112,20 @@ async def importar_relacion_pecosas(
     """Reemplaza por completo la tabla con lo que traiga el archivo nuevo
     — la Relación de Pecosas de SIGA es un reporte acumulado a la fecha,
     así que no tiene sentido ir sumando importaciones viejas."""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+    extension = os.path.splitext(archivo.filename or "")[1].lower()
+    if extension not in {".xls", ".xlsx"}:
+        return RedirectResponse(
+            url="/control?error=Selecciona un archivo Excel de SIGA con extensión .xls o .xlsx",
+            status_code=303,
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
         tmp.write(await archivo.read())
         ruta_temporal = tmp.name
 
     try:
         df = leer_relacion_pecosas(ruta_temporal)
-    except ValueError as e:
+    except (ImportError, ValueError) as e:
         return RedirectResponse(url=f"/control?error={e}", status_code=303)
     finally:
         os.remove(ruta_temporal)

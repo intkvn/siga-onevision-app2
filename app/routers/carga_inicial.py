@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Expediente, Pecosa, BienAlta, CentroCosto, LoteCarga
+from app.models import Expediente, Pecosa, BienAlta, CentroCosto, LoteCarga, Persona
 from app.auth import requiere_login
 from app.services.excel_carga_inicial import leer_consolidado
 from app.services.excel_siga import extraer_numero_pecosa
@@ -17,6 +17,16 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 ESTADOS_QUE_SE_PUEDEN_SUBIR = ("Recibida", "Normalizada")  # no se pisa una pecosa ya más avanzada
+
+
+def _estado_maestros(db: Session) -> dict:
+    personas_cargadas = db.query(Persona).count()
+    centros_cargados = db.query(CentroCosto).count()
+    return {
+        "personas_cargadas": personas_cargadas,
+        "centros_cargados": centros_cargados,
+        "maestros_listos": personas_cargadas > 0 and centros_cargados > 0,
+    }
 
 
 def _normalizar(t) -> str:
@@ -33,8 +43,13 @@ def _limpiar_numero(valor) -> str:
 
 
 @router.get("/carga-inicial", response_class=HTMLResponse)
-def formulario_carga_inicial(request: Request, _=Depends(requiere_login)):
-    return templates.TemplateResponse("carga_inicial.html", {"request": request, "resultado": None})
+def formulario_carga_inicial(
+    request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)
+):
+    return templates.TemplateResponse(
+        "carga_inicial.html",
+        {"request": request, "resultado": None, **_estado_maestros(db)},
+    )
 
 
 @router.post("/carga-inicial/procesar", response_class=HTMLResponse)
@@ -44,6 +59,14 @@ async def procesar_carga_inicial(
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
+    estado_maestros = _estado_maestros(db)
+    if not estado_maestros["maestros_listos"]:
+        return templates.TemplateResponse(
+            "carga_inicial.html",
+            {"request": request, "resultado": None, **estado_maestros},
+            status_code=400,
+        )
+
     centros_por_nombre = {_normalizar(c.nombre_depend): c for c in db.query(CentroCosto).all()}
     codigos_ya_cargados = {b.codigo_patrimonial for b in db.query(BienAlta.codigo_patrimonial).all()}
     expedientes_cache = {e.numero: e for e in db.query(Expediente).all()}
@@ -202,4 +225,7 @@ async def procesar_carga_inicial(
         "establecimientos_sin_match": sorted(establecimientos_sin_match),
         "lotes_con_id_no_numerico": sorted(lotes_con_id_no_numerico),
     }
-    return templates.TemplateResponse("carga_inicial.html", {"request": request, "resultado": resultado})
+    return templates.TemplateResponse(
+        "carga_inicial.html",
+        {"request": request, "resultado": resultado, **estado_maestros},
+    )

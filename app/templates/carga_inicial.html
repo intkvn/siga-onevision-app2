@@ -3,6 +3,14 @@
 {% block contenido %}
 <h3 class="mb-4">Carga Inicial (datos históricos)</h3>
 
+{% if not maestros_listos %}
+<div class="alert alert-warning">
+    Antes de realizar la Carga Inicial debes cargar los dos maestros.
+    Actualmente hay {{ personas_cargadas }} persona(s) y {{ centros_cargados }} centro(s) de costo.
+    Ve a <a href="/maestros" class="alert-link">Maestros</a>, carga Personas y Centros de Costo, y luego regresa aquí.
+</div>
+{% endif %}
+
 <div class="card mb-4">
     <div class="card-body">
         <p class="text-muted">
@@ -11,15 +19,15 @@
             varios archivos a la vez. Por cada fila, la app crea (si no existen) el expediente, la pecosa y
             el lote correspondientes, y guarda el bien vinculado a los tres. No duplica nada que ya esté
             cargado (compara por código patrimonial). Las pecosas nuevas quedan marcadas como
-            <strong>"Sticker generado"</strong> — tú las marcas como firmadas después, igual que las demás,
+            <strong>"Sticker generado"</strong> - tú las marcas como firmadas después, igual que las demás,
             en <a href="/pecosas">Pecosas</a>.
         </p>
         <form method="post" action="/carga-inicial/procesar" enctype="multipart/form-data">
             <div class="mb-3">
                 <label class="form-label">Excel(es) consolidado(s) (puedes elegir varios)</label>
-                <input type="file" name="archivos" class="form-control" multiple required>
+                <input type="file" name="archivos" class="form-control" multiple required {{ "disabled" if not maestros_listos else "" }}>
             </div>
-            <button type="submit" class="btn btn-primary">Procesar carga inicial</button>
+            <button type="submit" class="btn btn-primary" {{ "disabled" if not maestros_listos else "" }}>Procesar carga inicial</button>
         </form>
     </div>
 </div>
@@ -33,15 +41,15 @@
 
 {% if resultado.lotes_con_id_no_numerico %}
 <div class="alert alert-warning">
-    ⚠️ Estos valores de la columna "lote" no eran números limpios, así que esos bienes se agruparon
+    Estos valores de la columna "lote" no eran números limpios, así que esos bienes se agruparon
     en un lote con ID autogenerado en vez de usar ese valor como ID: <strong>{{ resultado.lotes_con_id_no_numerico|join(", ") }}</strong>
 </div>
 {% endif %}
 
 {% if resultado.establecimientos_sin_match %}
 <div class="alert alert-warning">
-    ⚠️ Estos establecimientos no coincidieron con ningún centro de costo de tu maestro (quedaron sin
-    IPRESS asignado en los bienes que los usan) — revísalos en <a href="/maestros">Maestros</a>:
+    Estos establecimientos no coincidieron con ningún centro de costo de tu maestro (quedaron sin
+    IPRESS asignado en los bienes que los usan) - revísalos en <a href="/maestros">Maestros</a>:
     <strong>{{ resultado.establecimientos_sin_match|join(", ") }}</strong>
 </div>
 {% endif %}

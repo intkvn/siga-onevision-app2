@@ -12,10 +12,11 @@
         <h5>Importar Relación de Pecosas (SIGA)</h5>
         <p class="text-muted">
             Sube el reporte de "Relación de Pecosas" tal como lo descargas de SIGA. Cada vez que lo subas
-            reemplaza por completo la tabla — descárgalo de nuevo cuando quieras actualizar este control.
+            reemplaza por completo la tabla. El archivo original de SIGA en formato .xls se acepta directamente;
+            también puedes usar .xlsx.
         </p>
         <form method="post" action="/control/importar" enctype="multipart/form-data" class="d-flex gap-2">
-            <input type="file" name="archivo" class="form-control" style="max-width: 400px;" required>
+            <input type="file" name="archivo" accept=".xls,.xlsx" class="form-control" style="max-width: 400px;" required>
             <button type="submit" class="btn btn-primary">Importar / actualizar</button>
         </form>
     </div>
@@ -58,7 +59,7 @@
 </div>
 
 <a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte completo (Excel)</a>
-<p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (el listado completo del reporte de SIGA con su estado — ideal para enviar a almacén y pedir lo que falta) y "Bienes con QR" (el detalle de cada bien que ya tiene su código QR generado).</p>
+<p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (el listado completo del reporte de SIGA con su estado, ideal para enviar a almacén y pedir lo que falta) y "Bienes con QR" (el detalle de cada bien que ya tiene su código QR generado).</p>
 
 {% if filas %}
 <table class="table table-sm bg-white">

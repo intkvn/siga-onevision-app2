@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import xlwt
 from sqlalchemy import create_engine
@@ -34,6 +35,14 @@ class ValidacionCargaInicialTest(unittest.TestCase):
 
 
 class LecturaRelacionPecosasXlsTest(unittest.TestCase):
+    @patch("app.services.excel_relacion_pecosas.pd.read_excel")
+    def test_selecciona_xlrd_explicitamente_para_xls(self, leer_excel):
+        leer_excel.return_value.columns = COLUMNAS_NECESARIAS
+
+        leer_relacion_pecosas("reporte_siga.xls")
+
+        leer_excel.assert_called_once_with("reporte_siga.xls", engine="xlrd")
+
     def test_lee_archivo_xls_de_siga(self):
         libro = xlwt.Workbook()
         hoja = libro.add_sheet("Relación")

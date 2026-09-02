@@ -5,6 +5,8 @@ varias líneas), con la cantidad aprobada de cada línea. Sumando
 cant_aprobada por nro_pecosa se obtiene el total de bienes que esa
 pecosa debería tener.
 """
+from pathlib import Path
+
 import pandas as pd
 
 COLUMNAS_NECESARIAS = [
@@ -15,7 +17,12 @@ COLUMNAS_NECESARIAS = [
 
 
 def leer_relacion_pecosas(ruta_archivo: str) -> pd.DataFrame:
-    df = pd.read_excel(ruta_archivo)
+    # SIGA exporta algunos .xls como un flujo BIFF antiguo sin el contenedor
+    # OLE habitual. Pandas no siempre puede detectar ese formato por sí solo,
+    # pero xlrd sí lo lee cuando se selecciona explícitamente.
+    extension = Path(ruta_archivo).suffix.lower()
+    motor = "xlrd" if extension == ".xls" else None
+    df = pd.read_excel(ruta_archivo, engine=motor)
     faltantes = [c for c in COLUMNAS_NECESARIAS if c not in df.columns]
     if faltantes:
         columnas_disponibles = ", ".join(str(c) for c in df.columns)

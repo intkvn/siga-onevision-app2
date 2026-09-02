@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import xlwt
+import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -14,6 +15,7 @@ from app.models import (
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import ESTADO_EXCESO, _calcular_control, _mover_bien_a_pecosa
+from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 
 
@@ -129,6 +131,63 @@ class LecturaRelacionPecosasXlsTest(unittest.TestCase):
         self.assertEqual(list(resultado.columns), COLUMNAS_NECESARIAS)
         self.assertEqual(len(resultado), 1)
         self.assertEqual(resultado.iloc[0]["cant_aprobada"], 1)
+
+
+class RegularizacionCargaInicialTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+        self.persona = Persona(nombre_completo="RESPONSABLE SIGA", dni="12345678")
+        self.centro = CentroCosto(nombre_depend="CENTRO SIGA", ipress="4567")
+        expediente = Expediente(numero="41724")
+        lote_historico = LoteCarga(anio="", ejecutora="", pecosas_solicitadas="2011")
+        lote_normal = LoteCarga(anio="2026", ejecutora="785", pecosas_solicitadas="2473")
+        self.db.add_all([self.persona, self.centro, expediente, lote_historico, lote_normal])
+        self.db.flush()
+        pecosa = Pecosa(numero="2011", expediente_id=expediente.id, estado="StickerGenerado")
+        self.db.add(pecosa)
+        self.db.flush()
+        self.bien_historico = BienAlta(
+            pecosa_id=pecosa.id, lote_id=lote_historico.id,
+            codigo_patrimonial="602287628807", descripcion="BIEN HISTORICO",
+        )
+        self.bien_no_encontrado = BienAlta(
+            pecosa_id=pecosa.id, lote_id=lote_historico.id,
+            codigo_patrimonial="602287628808", descripcion="BIEN SIN FILA",
+        )
+        self.bien_normal = BienAlta(
+            pecosa_id=pecosa.id, lote_id=lote_normal.id,
+            codigo_patrimonial="602287628809", descripcion="BIEN NORMAL",
+        )
+        self.db.add_all([self.bien_historico, self.bien_no_encontrado, self.bien_normal])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_regulariza_todos_los_lotes_historicos_por_codigo_patrimonial(self):
+        reporte = pd.DataFrame([{
+            "codigo_patrimonial": "602287628807",
+            "nombre_completo": "RESPONSABLE SIGA",
+            "nombre_depend": "CENTRO SIGA",
+            "fecha_movimto": "2026-09-02",
+            "estado_conserv": "1",
+        }])
+
+        resumen = _regularizar_bienes_historicos(self.db, reporte)
+        self.db.commit()
+
+        self.assertEqual(resumen["pendientes"], 2)
+        self.assertEqual(resumen["actualizados"], 1)
+        self.assertEqual(resumen["no_encontrados"], 1)
+        self.assertEqual(self.bien_historico.nombre_completo_siga, "RESPONSABLE SIGA")
+        self.assertEqual(self.bien_historico.nombre_depend_siga, "CENTRO SIGA")
+        self.assertEqual(self.bien_historico.persona_id, self.persona.id)
+        self.assertEqual(self.bien_historico.centro_costo_id, self.centro.id)
+        self.assertIsNone(self.bien_normal.nombre_completo_siga)
+        self.assertTrue(_resumen_lote(self.db, self.bien_historico.lote)["estado"].startswith("Histórico:"))
 
 
 if __name__ == "__main__":

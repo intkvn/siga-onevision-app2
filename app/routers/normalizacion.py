@@ -1,5 +1,6 @@
 import os
 import tempfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
@@ -35,9 +36,15 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
 
     lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
     lotes = [_resumen_lote(db, lote) for lote in lotes_query]
+    bienes_historicos_pendientes = _bienes_historicos_pendientes_siga(db)
     return templates.TemplateResponse(
         "normalizacion.html",
-        {"request": request, "expedientes": expedientes, "lotes": lotes},
+        {
+            "request": request,
+            "expedientes": expedientes,
+            "lotes": lotes,
+            "bienes_historicos_pendientes": bienes_historicos_pendientes,
+        },
     )
 
 
@@ -47,11 +54,14 @@ def _resumen_lote(db: Session, lote: LoteCarga) -> dict:
     bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
     pendientes = [b for b in bienes if _cruce_incompleto(b)]
     no_encontradas = _pecosas_no_encontradas(lote, bienes)
+    pendientes_siga = [b for b in bienes if _bien_historico_pendiente_siga(b)]
 
     if lote.archivo_generado:
         estado = "Generado"
     elif not bienes:
         estado = "Vacío / sin procesar"
+    elif pendientes_siga:
+        estado = f"Histórico: faltan datos SIGA ({len(pendientes_siga)})"
     elif pendientes or no_encontradas:
         estado = "Incompleto"
     else:
@@ -62,6 +72,33 @@ def _resumen_lote(db: Session, lote: LoteCarga) -> dict:
         "estado": estado,
         "expedientes": expedientes_de_lote(db, lote),
     }
+
+
+def _es_lote_historico(lote: LoteCarga) -> bool:
+    """Los lotes creados por Carga Inicial no tienen año ni ejecutora.
+
+    La normalización habitual siempre crea ambos valores desde la configuración.
+    Esto permite ofrecer la regularización solo a los datos migrados, sin
+    alterar el flujo de pecosas nuevas.
+    """
+    return not str(lote.anio or "").strip() and not str(lote.ejecutora or "").strip()
+
+
+def _bien_historico_pendiente_siga(bien: BienAlta) -> bool:
+    """Indica que un bien migrado no conserva aún sus datos fuente de SIGA."""
+    return (
+        bien.lote is not None
+        and _es_lote_historico(bien.lote)
+        and (
+            not str(bien.nombre_depend_siga or "").strip()
+            or not str(bien.nombre_completo_siga or "").strip()
+        )
+    )
+
+
+def _bienes_historicos_pendientes_siga(db: Session) -> list[BienAlta]:
+    bienes = db.query(BienAlta).join(LoteCarga).all()
+    return [bien for bien in bienes if _bien_historico_pendiente_siga(bien)]
 
 
 def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa], df_filtrado):
@@ -149,6 +186,109 @@ async def procesar_reporte(
     _procesar_pecosas_en_lote(db, lote, pecosas, df_filtrado)
     db.commit()
     return RedirectResponse(url=f"/normalizacion/lote/{lote.id}", status_code=303)
+
+
+def _codigo_patrimonial_normalizado(valor) -> str:
+    return str(valor or "").strip().upper()
+
+
+def _regularizar_bienes_historicos(db: Session, df) -> dict:
+    """Completa los datos SIGA de todos los bienes migrados pendientes.
+
+    El código patrimonial es la clave de cruce. Una fila con código repetido
+    en el reporte se considera ambigua y no modifica ningún bien.
+    """
+    filas_por_codigo = {}
+    codigos_duplicados = set()
+    for _, fila in df.iterrows():
+        codigo = _codigo_patrimonial_normalizado(fila.get("codigo_patrimonial"))
+        if not codigo:
+            continue
+        if codigo in filas_por_codigo:
+            codigos_duplicados.add(codigo)
+        else:
+            filas_por_codigo[codigo] = fila
+
+    resumen = {
+        "pendientes": 0,
+        "actualizados": 0,
+        "no_encontrados": 0,
+        "duplicados": 0,
+        "sin_persona": 0,
+        "sin_centro": 0,
+    }
+    for bien in _bienes_historicos_pendientes_siga(db):
+        resumen["pendientes"] += 1
+        codigo = _codigo_patrimonial_normalizado(bien.codigo_patrimonial)
+        if codigo in codigos_duplicados:
+            resumen["duplicados"] += 1
+            continue
+        fila = filas_por_codigo.get(codigo)
+        if fila is None:
+            resumen["no_encontrados"] += 1
+            continue
+
+        resultado = cruzar_fila(db, fila.get("nombre_completo"), fila.get("nombre_depend"))
+        bien.nombre_depend_siga = str(fila.get("nombre_depend", "") or "").strip()
+        bien.nombre_completo_siga = str(fila.get("nombre_completo", "") or "").strip()
+        bien.fecha_alta = pd_to_datetime(fila.get("fecha_movimto"))
+        bien.estado_conservacion = str(fila.get("estado_conserv", "") or "").strip()
+
+        # Solo reemplazamos una asignación manual cuando SIGA tiene una
+        # coincidencia exacta en el maestro. Si no la tiene, conservamos lo
+        # que el usuario haya podido corregir previamente.
+        if resultado["persona"]:
+            bien.persona_id = resultado["persona"].id
+        else:
+            resumen["sin_persona"] += 1
+        if resultado["centro_costo"]:
+            bien.centro_costo_id = resultado["centro_costo"].id
+        else:
+            resumen["sin_centro"] += 1
+        resumen["actualizados"] += 1
+
+    return resumen
+
+
+@router.post("/normalizacion/regularizar-carga-inicial")
+async def regularizar_carga_inicial(
+    archivo: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Procesa una sola vez un reporte completo de Altas SIGA para todos
+    los lotes que provinieron de la Carga Inicial."""
+    if not _bienes_historicos_pendientes_siga(db):
+        return RedirectResponse(
+            url="/normalizacion?mensaje=No+hay+bienes+hist%C3%B3ricos+pendientes+de+regularizar",
+            status_code=303,
+        )
+
+    extension = os.path.splitext(archivo.filename or "")[1] or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+        tmp.write(await archivo.read())
+        ruta_temporal = tmp.name
+    try:
+        df = leer_reporte_siga(ruta_temporal)
+        resumen = _regularizar_bienes_historicos(db, df)
+        db.commit()
+    except (ValueError, OSError) as error:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/normalizacion?error={quote(str(error))}", status_code=303
+        )
+    finally:
+        os.remove(ruta_temporal)
+
+    mensaje = (
+        "Regularización terminada: "
+        f"{resumen['actualizados']} bien(es) actualizados; "
+        f"{resumen['no_encontrados']} no aparecen en el reporte; "
+        f"{resumen['duplicados']} con código repetido en el reporte; "
+        f"{resumen['sin_persona']} sin coincidencia de persona; "
+        f"{resumen['sin_centro']} sin coincidencia de centro de costo."
+    )
+    return RedirectResponse(url=f"/normalizacion?mensaje={quote(mensaje)}", status_code=303)
 
 
 @router.post("/normalizacion/lote/{lote_id}/completar")

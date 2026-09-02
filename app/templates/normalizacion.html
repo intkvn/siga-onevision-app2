@@ -6,6 +6,9 @@
 {% if request.query_params.get("error") %}
 <div class="alert alert-warning">{{ request.query_params.get("error") }}</div>
 {% endif %}
+{% if request.query_params.get("mensaje") %}
+<div class="alert alert-info">{{ request.query_params.get("mensaje") }}</div>
+{% endif %}
 
 <div class="card mb-4">
     <div class="card-body">
@@ -35,6 +38,27 @@
     </div>
 </div>
 
+{% if bienes_historicos_pendientes %}
+<div class="card mb-4 border-warning">
+    <div class="card-body">
+        <h5>2. Regularizar datos SIGA de la Carga Inicial</h5>
+        <p class="mb-2">
+            Hay {{ bienes_historicos_pendientes|length }} bien(es) migrados en lotes históricos que todavía no conservan
+            su dependencia ni responsable de SIGA. Sube una sola vez el reporte completo de Altas Institucionales.
+        </p>
+        <p class="text-muted small">
+            El sistema buscará cada bien por código patrimonial, actualizará solamente los bienes históricos pendientes
+            y no creará lotes ni cambiará pecosas, códigos patrimoniales o QR. Los códigos no encontrados o repetidos
+            se informarán al terminar.
+        </p>
+        <form method="post" action="/normalizacion/regularizar-carga-inicial" enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+            <input type="file" name="archivo" class="form-control" accept=".xlsx,.xls" required>
+            <button type="submit" class="btn btn-warning text-dark text-nowrap">Regularizar carga inicial</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
 <h5>Lotes recientes ({{ lotes|length }})</h5>
 <table class="table table-sm bg-white">
     <thead><tr><th>ID (N° lote)</th><th>Fecha</th><th>Expedientes</th><th>Estado</th><th></th></tr></thead>
@@ -47,6 +71,7 @@
             <td>
                 {% if item.estado == "Generado" %}<span class="badge bg-success">{{ item.estado }}</span>
                 {% elif item.estado == "Completo (listo para generar)" %}<span class="badge bg-primary">{{ item.estado }}</span>
+                {% elif item.estado.startswith("Histórico:") %}<span class="badge bg-warning text-dark">{{ item.estado }}</span>
                 {% elif item.estado == "Incompleto" %}<span class="badge bg-warning text-dark">{{ item.estado }}</span>
                 {% else %}<span class="badge bg-secondary">{{ item.estado }}</span>
                 {% endif %}

@@ -21,7 +21,7 @@ ENCABEZADOS_BARTENDER = [
     "Marca", "Modelo", "Nro Serie", "Numero pecosa",
 ]
 ENCABEZADOS_HOJA1 = [
-    "Codigo Patrimonial", "Codigo QR", "Bien", "Establecimiento",
+    "ITEM", "Codigo Patrimonial", "Codigo QR", "Bien", "Establecimiento",
     "Marca", "Modelo", "Nro Serie", "Numero pecosa",
 ]
 
@@ -163,18 +163,19 @@ def _generar_hoja_impresion(bienes, expedientes, lote_id, ruta_salida):
     borde_tabla = Border(
         left=borde_fino, right=borde_fino, top=borde_fino, bottom=borde_fino
     )
-    for fila_idx, bien in enumerate(bienes, start=5):
-        for col, valor in enumerate(_fila_hoja1(bien), start=1):
+    for item, bien in enumerate(bienes, start=1):
+        fila_idx = item + 4
+        for col, valor in enumerate(_fila_hoja1(bien, item), start=1):
             celda = hoja1.cell(row=fila_idx, column=col, value=valor)
             celda.border = borde_tabla
             celda.alignment = Alignment(vertical="top")
-            if col in (1, 2, 8):
+            if col in (2, 3, 9):
                 celda.number_format = "@"
 
     for celda in hoja1[4]:
         celda.border = borde_tabla
 
-    anchos = [22, 18, 42, 32, 18, 18, 20, 18]
+    anchos = [9, 22, 18, 42, 32, 18, 18, 20, 18]
     for col, ancho in enumerate(anchos, start=1):
         hoja1.column_dimensions[hoja1.cell(row=4, column=col).column_letter].width = ancho
 
@@ -204,8 +205,9 @@ def _fila_bartender(bien) -> list:
     ]
 
 
-def _fila_hoja1(bien) -> list:
+def _fila_hoja1(bien, item: int) -> list:
     return [
+        item,
         bien.codigo_patrimonial,
         bien.codigo_qr or "",
         bien.descripcion,

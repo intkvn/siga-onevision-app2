@@ -1,6 +1,10 @@
 """Lectura del reporte patrimonial SIGA usado para verificar pecosas."""
 import os
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -32,7 +36,10 @@ def leer_reporte_verificacion(ruta_archivo: str) -> pd.DataFrame:
     if extension == ".xls":
         parametros["engine"] = "xlrd"
 
-    df = pd.read_excel(ruta_archivo, **parametros)
+    try:
+        df = pd.read_excel(ruta_archivo, **parametros)
+    except Exception as error:
+        df = _leer_xls_exportado_por_siga(ruta_archivo, extension, error)
     df.columns = [str(columna).strip().lower() for columna in df.columns]
     faltantes = [columna for columna in COLUMNAS_NECESARIAS if columna not in df.columns]
     if faltantes:
@@ -59,3 +66,26 @@ def leer_reporte_verificacion(ruta_archivo: str) -> pd.DataFrame:
         )
 
     return resultado
+
+
+def _leer_xls_exportado_por_siga(ruta_archivo: str, extension: str, error_original: Exception) -> pd.DataFrame:
+    """Convierte exportaciones .xls de SIGA que no cumplen el formato esperado por xlrd."""
+    if extension != ".xls" or shutil.which("soffice") is None:
+        raise ValueError(
+            "No se pudo leer el archivo Excel. Ábrelo en Excel y guárdalo como .xlsx antes de cargarlo."
+        ) from error_original
+
+    with tempfile.TemporaryDirectory() as directorio:
+        resultado = subprocess.run(
+            ["soffice", "--headless", "--convert-to", "xlsx", "--outdir", directorio, ruta_archivo],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        archivos = list(Path(directorio).glob("*.xlsx"))
+        if resultado.returncode != 0 or not archivos:
+            raise ValueError(
+                "No se pudo convertir el archivo exportado por SIGA. Ábrelo en Excel y guárdalo como .xlsx antes de cargarlo."
+            ) from error_original
+        return pd.read_excel(archivos[0], dtype=str)

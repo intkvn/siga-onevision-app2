@@ -170,6 +170,8 @@ class RegularizacionCargaInicialTest(unittest.TestCase):
     def test_regulariza_todos_los_lotes_historicos_por_codigo_patrimonial(self):
         reporte = pd.DataFrame([{
             "codigo_patrimonial": "602287628807",
+            "ano_eje": "2026",
+            "sec_ejec": "785",
             "nombre_completo": "RESPONSABLE SIGA",
             "nombre_depend": "CENTRO SIGA",
             "fecha_movimto": "2026-09-02",
@@ -186,8 +188,11 @@ class RegularizacionCargaInicialTest(unittest.TestCase):
         self.assertEqual(self.bien_historico.nombre_depend_siga, "CENTRO SIGA")
         self.assertEqual(self.bien_historico.persona_id, self.persona.id)
         self.assertEqual(self.bien_historico.centro_costo_id, self.centro.id)
+        self.assertEqual(self.bien_historico.lote.anio, "2026")
+        self.assertEqual(self.bien_historico.lote.ejecutora, "785")
+        self.assertEqual(resumen["lotes_actualizados"], 1)
         self.assertIsNone(self.bien_normal.nombre_completo_siga)
-        self.assertTrue(_resumen_lote(self.db, self.bien_historico.lote)["estado"].startswith("Histórico:"))
+        self.assertEqual(_resumen_lote(self.db, self.bien_historico.lote)["estado"], "Incompleto")
 
 
 if __name__ == "__main__":

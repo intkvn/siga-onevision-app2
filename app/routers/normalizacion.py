@@ -37,6 +37,7 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
     lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
     lotes = [_resumen_lote(db, lote) for lote in lotes_query]
     bienes_historicos_pendientes = _bienes_historicos_pendientes_siga(db)
+    lotes_historicos_sin_datos = _lotes_historicos_sin_datos_lote(db)
     return templates.TemplateResponse(
         "normalizacion.html",
         {
@@ -44,6 +45,7 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
             "expedientes": expedientes,
             "lotes": lotes,
             "bienes_historicos_pendientes": bienes_historicos_pendientes,
+            "lotes_historicos_sin_datos": lotes_historicos_sin_datos,
         },
     )
 
@@ -81,7 +83,7 @@ def _es_lote_historico(lote: LoteCarga) -> bool:
     Esto permite ofrecer la regularización solo a los datos migrados, sin
     alterar el flujo de pecosas nuevas.
     """
-    return not str(lote.anio or "").strip() and not str(lote.ejecutora or "").strip()
+    return not str(lote.anio or "").strip() or not str(lote.ejecutora or "").strip()
 
 
 def _bien_historico_pendiente_siga(bien: BienAlta) -> bool:
@@ -99,6 +101,13 @@ def _bien_historico_pendiente_siga(bien: BienAlta) -> bool:
 def _bienes_historicos_pendientes_siga(db: Session) -> list[BienAlta]:
     bienes = db.query(BienAlta).join(LoteCarga).all()
     return [bien for bien in bienes if _bien_historico_pendiente_siga(bien)]
+
+
+def _lotes_historicos_sin_datos_lote(db: Session) -> list[LoteCarga]:
+    return [
+        lote for lote in db.query(LoteCarga).all()
+        if _es_lote_historico(lote)
+    ]
 
 
 def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa], df_filtrado):
@@ -192,8 +201,20 @@ def _codigo_patrimonial_normalizado(valor) -> str:
     return str(valor or "").strip().upper()
 
 
+def _texto_siga(valor) -> str:
+    """Convierte un valor de Excel a texto sin dejar sufijos como '.0'."""
+    import pandas as pd
+
+    if valor is None or pd.isna(valor):
+        return ""
+    texto = str(valor).strip()
+    if texto.endswith(".0") and texto[:-2].isdigit():
+        return texto[:-2]
+    return texto
+
+
 def _regularizar_bienes_historicos(db: Session, df) -> dict:
-    """Completa los datos SIGA de todos los bienes migrados pendientes.
+    """Completa los datos SIGA y los datos de lote de la Carga Inicial.
 
     El código patrimonial es la clave de cruce. Una fila con código repetido
     en el reporte se considera ambigua y no modifica ningún bien.
@@ -216,16 +237,40 @@ def _regularizar_bienes_historicos(db: Session, df) -> dict:
         "duplicados": 0,
         "sin_persona": 0,
         "sin_centro": 0,
+        "lotes_actualizados": 0,
+        "lotes_inconsistentes": 0,
     }
-    for bien in _bienes_historicos_pendientes_siga(db):
-        resumen["pendientes"] += 1
+    pendientes_siga = {bien.id for bien in _bienes_historicos_pendientes_siga(db)}
+    lotes_sin_datos = {lote.id for lote in _lotes_historicos_sin_datos_lote(db)}
+    valores_lote = {}
+
+    bienes_historicos = [
+        bien for bien in db.query(BienAlta).join(LoteCarga).all()
+        if bien.lote and _es_lote_historico(bien.lote)
+    ]
+    for bien in bienes_historicos:
+        completar_datos_siga = bien.id in pendientes_siga
+        completar_datos_lote = bien.lote_id in lotes_sin_datos
+        if completar_datos_siga:
+            resumen["pendientes"] += 1
         codigo = _codigo_patrimonial_normalizado(bien.codigo_patrimonial)
         if codigo in codigos_duplicados:
-            resumen["duplicados"] += 1
+            if completar_datos_siga or completar_datos_lote:
+                resumen["duplicados"] += 1
             continue
         fila = filas_por_codigo.get(codigo)
         if fila is None:
-            resumen["no_encontrados"] += 1
+            if completar_datos_siga or completar_datos_lote:
+                resumen["no_encontrados"] += 1
+            continue
+
+        if completar_datos_lote:
+            anio = _texto_siga(fila.get("ano_eje"))
+            ejecutora = _texto_siga(fila.get("sec_ejec"))
+            if anio and ejecutora:
+                valores_lote.setdefault(bien.lote_id, set()).add((anio, ejecutora))
+
+        if not completar_datos_siga:
             continue
 
         resultado = cruzar_fila(db, fila.get("nombre_completo"), fila.get("nombre_depend"))
@@ -247,6 +292,16 @@ def _regularizar_bienes_historicos(db: Session, df) -> dict:
             resumen["sin_centro"] += 1
         resumen["actualizados"] += 1
 
+    for lote in _lotes_historicos_sin_datos_lote(db):
+        valores = valores_lote.get(lote.id, set())
+        if len(valores) == 1:
+            anio, ejecutora = valores.pop()
+            lote.anio = anio
+            lote.ejecutora = ejecutora
+            resumen["lotes_actualizados"] += 1
+        elif len(valores) > 1:
+            resumen["lotes_inconsistentes"] += 1
+
     return resumen
 
 
@@ -258,7 +313,7 @@ async def regularizar_carga_inicial(
 ):
     """Procesa una sola vez un reporte completo de Altas SIGA para todos
     los lotes que provinieron de la Carga Inicial."""
-    if not _bienes_historicos_pendientes_siga(db):
+    if not _bienes_historicos_pendientes_siga(db) and not _lotes_historicos_sin_datos_lote(db):
         return RedirectResponse(
             url="/normalizacion?mensaje=No+hay+bienes+hist%C3%B3ricos+pendientes+de+regularizar",
             status_code=303,
@@ -286,7 +341,9 @@ async def regularizar_carga_inicial(
         f"{resumen['no_encontrados']} no aparecen en el reporte; "
         f"{resumen['duplicados']} con código repetido en el reporte; "
         f"{resumen['sin_persona']} sin coincidencia de persona; "
-        f"{resumen['sin_centro']} sin coincidencia de centro de costo."
+        f"{resumen['sin_centro']} sin coincidencia de centro de costo; "
+        f"{resumen['lotes_actualizados']} lote(s) con Año y Ejecutora completados; "
+        f"{resumen['lotes_inconsistentes']} lote(s) con valores distintos en el reporte."
     )
     return RedirectResponse(url=f"/normalizacion?mensaje={quote(mensaje)}", status_code=303)
 

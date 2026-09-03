@@ -38,18 +38,19 @@
     </div>
 </div>
 
-{% if bienes_historicos_pendientes %}
+{% if bienes_historicos_pendientes or lotes_historicos_sin_datos %}
 <div class="card mb-4 border-warning">
     <div class="card-body">
         <h5>2. Regularizar datos SIGA de la Carga Inicial</h5>
         <p class="mb-2">
-            Hay {{ bienes_historicos_pendientes|length }} bien(es) migrados en lotes históricos que todavía no conservan
-            su dependencia ni responsable de SIGA. Sube una sola vez el reporte completo de Altas Institucionales.
+            Hay {{ bienes_historicos_pendientes|length }} bien(es) migrados que todavía no conservan su dependencia
+            ni responsable de SIGA, y {{ lotes_historicos_sin_datos|length }} lote(s) histórico(s) sin Año o Ejecutora.
+            Sube una sola vez el reporte completo de Altas Institucionales.
         </p>
         <p class="text-muted small">
             El sistema buscará cada bien por código patrimonial, actualizará solamente los bienes históricos pendientes
-            y no creará lotes ni cambiará pecosas, códigos patrimoniales o QR. Los códigos no encontrados o repetidos
-            se informarán al terminar.
+            y completará Año y Ejecutora de cada lote desde las columnas ano_eje y sec_ejec. No creará lotes ni
+            cambiará pecosas, códigos patrimoniales o QR. Los códigos no encontrados o repetidos se informarán al terminar.
         </p>
         <form method="post" action="/normalizacion/regularizar-carga-inicial" enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
             <input type="file" name="archivo" class="form-control" accept=".xlsx,.xls" required>

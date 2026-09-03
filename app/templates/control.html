@@ -41,6 +41,22 @@
                 </select>
             </div>
             <div class="col-auto">
+                <select name="lote" class="form-select form-select-sm">
+                    <option value="">Todos los lotes</option>
+                    {% for numero_lote in lotes %}
+                    <option value="{{ numero_lote }}" {{ "selected" if filtros.lote == numero_lote else "" }}>Lote {{ numero_lote }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <select name="expediente_alta" class="form-select form-select-sm">
+                    <option value="">Todos los expedientes de alta</option>
+                    {% for numero_expediente in expedientes_alta %}
+                    <option value="{{ numero_expediente }}" {{ "selected" if filtros.expediente_alta == numero_expediente else "" }}>Exp. {{ numero_expediente }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
                 <button type="submit" class="btn btn-sm btn-primary">Buscar</button>
                 <a href="/control" class="btn btn-sm btn-outline-secondary">Limpiar</a>
             </div>
@@ -51,18 +67,19 @@
 <div class="row mb-4">
     {% for estado in estados %}
     <div class="col-md">
-        <div class="card text-center">
+        <a class="card text-center text-decoration-none {{ 'border-primary border-2' if filtros.estado == estado else '' }}" href="/control?estado={{ estado|urlencode }}">
             <div class="card-body">
                 <div class="fs-3">{{ resumen.get(estado, 0) }}</div>
                 <div class="text-muted small">{{ estado }}</div>
             </div>
-        </div>
+        </a>
     </div>
     {% endfor %}
 </div>
 
 <a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte completo (Excel)</a>
 <button type="button" class="btn btn-outline-warning mb-3" onclick="abrirObservacionSeleccionadas()">Observar pecosas seleccionadas</button>
+<button type="button" class="btn btn-outline-secondary mb-3" onclick="restituirObservacionesSeleccionadas()">Restituir observadas seleccionadas</button>
 <p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (incluye la causal y el sustento de las observadas) y "Bienes con QR".</p>
 
 {% if filas %}
@@ -70,7 +87,7 @@
 <table class="table table-sm bg-white">
     <thead>
         <tr>
-            <th></th><th>Año</th><th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th><th>Lote</th>
+            <th></th><th>N° Pecosa</th><th>Dependencia</th><th>Año</th><th>Fecha</th><th>Lote</th>
             <th>Esperada</th><th>Ingresada</th><th>Estado</th>
             <th>Observación</th><th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th><th></th>
         </tr>
@@ -81,11 +98,13 @@
             <td>
                 {% if f.estado == "Pendiente envío almacén" %}
                 <input class="form-check-input seleccion-observacion" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa {{ f.nro_pecosa }}">
+                {% elif f.estado == "Observada" %}
+                <input class="form-check-input seleccion-restitucion" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa observada {{ f.nro_pecosa }}">
                 {% endif %}
             </td>
-            <td>{{ f.ano_eje or "-" }}</td>
             <td>{{ f.nro_pecosa }}</td>
             <td>{{ f.nombre_depend }}</td>
+            <td>{{ f.ano_eje or "-" }}</td>
             <td>{{ f.fecha_pecosa }}</td>
             <td>{{ f.lotes|join(", ") if f.lotes else "-" }}</td>
             <td>{{ f.cantidad_esperada }}</td>
@@ -148,6 +167,8 @@
     </form>
 </dialog>
 
+<form id="form-restitucion-masiva" method="post" action="/control/restituir-observaciones" class="d-none"></form>
+
 <script>
 function abrirDialogoConClaves(claves) {
     if (!claves.length) {
@@ -176,6 +197,24 @@ function abrirObservacionSeleccionadas() {
 }
 function abrirObservacionIndividual(anio, numero) {
     abrirDialogoConClaves([`${anio}|${numero}`]);
+}
+function restituirObservacionesSeleccionadas() {
+    const claves = Array.from(document.querySelectorAll('.seleccion-restitucion:checked')).map((campo) => campo.value);
+    if (!claves.length) {
+        alert('Selecciona al menos una pecosa observada.');
+        return;
+    }
+    if (!confirm(`¿Restituir ${claves.length} pecosa(s) a Pendiente envío almacén?`)) return;
+    const formulario = document.getElementById('form-restitucion-masiva');
+    formulario.replaceChildren();
+    claves.forEach((clave) => {
+        const campo = document.createElement('input');
+        campo.type = 'hidden';
+        campo.name = 'claves';
+        campo.value = clave;
+        formulario.appendChild(campo);
+    });
+    formulario.submit();
 }
 </script>
 {% else %}

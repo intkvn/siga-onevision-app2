@@ -108,6 +108,8 @@ def ver_control(
     request: Request,
     numero: str = "",
     estado: str = "",
+    lote: str = "",
+    expediente_alta: str = "",
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
@@ -122,6 +124,18 @@ def ver_control(
         filas_filtradas = [f for f in filas_filtradas if numero.strip() in f["nro_pecosa"]]
     if estado:
         filas_filtradas = [f for f in filas_filtradas if f["estado"] == estado]
+    if lote:
+        filas_filtradas = [f for f in filas_filtradas if lote.strip() in {str(valor) for valor in f["lotes"]}]
+    if expediente_alta:
+        filas_filtradas = [
+            f for f in filas_filtradas
+            if expediente_alta.strip() in str(f["expediente_alta"] or "")
+        ]
+
+    lotes = sorted({str(lote_id) for fila in filas for lote_id in fila["lotes"]}, key=int)
+    expedientes_alta = sorted({
+        str(fila["expediente_alta"]) for fila in filas if fila["expediente_alta"]
+    })
 
     return templates.TemplateResponse(
         "control.html",
@@ -133,7 +147,12 @@ def ver_control(
                 ESTADO_FALTA_FIRMA, ESTADO_COMPLETA, ESTADO_OBSERVADA,
             ],
             "causales_observacion": CAUSALES_OBSERVACION,
-            "filtros": {"numero": numero, "estado": estado},
+            "lotes": lotes,
+            "expedientes_alta": expedientes_alta,
+            "filtros": {
+                "numero": numero, "estado": estado, "lote": lote,
+                "expediente_alta": expediente_alta,
+            },
         },
     )
 
@@ -274,6 +293,36 @@ def restituir_observacion(
     db.commit()
     return RedirectResponse(
         url=f"/control?info=La+pecosa+{registro.nro_pecosa}+volvi%C3%B3+a+Pendiente+env%C3%ADo+almac%C3%A9n",
+        status_code=303,
+    )
+
+
+@router.post("/control/restituir-observaciones")
+def restituir_observaciones(
+    claves: list[str] = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    seleccionadas = {_clave_control(valor) for valor in claves}
+    seleccionadas.discard(None)
+    if not seleccionadas:
+        return RedirectResponse(url="/control?error=Selecciona+al+menos+una+pecosa+observada", status_code=303)
+
+    registros = db.query(ObservacionControlPecosa).filter(
+        ObservacionControlPecosa.activa == 1,
+    ).all()
+    por_clave = {(registro.ano_eje, registro.nro_pecosa): registro for registro in registros}
+    validas = seleccionadas.intersection(por_clave)
+    if not validas:
+        return RedirectResponse(url="/control?error=Las+pecosas+seleccionadas+ya+no+est%C3%A1n+observadas", status_code=303)
+
+    for clave in validas:
+        registro = por_clave[clave]
+        registro.activa = 0
+        registro.restituida_en = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(
+        url=f"/control?info=Se+restituyeron+{len(validas)}+pecosa%28s%29+a+Pendiente+env%C3%ADo+almac%C3%A9n",
         status_code=303,
     )
 

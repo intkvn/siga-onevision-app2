@@ -8,8 +8,8 @@ from sqlalchemy import text
 from app.config import SECRET_KEY
 from app.database import Base, engine, get_db
 from app.auth import requiere_login
-from app.routers import auth_routes, pecosas, maestros, normalizacion, impresion, control, carga_inicial
-from app.models import Pecosa, RelacionPecosaItem  # noqa: F401  (necesario para que create_all las vea)
+from app.routers import auth_routes, pecosas, maestros, normalizacion, impresion, control, carga_inicial, verificacion
+from app.models import Pecosa, RelacionPecosaItem, VerificacionPecosaSiga  # noqa: F401  (necesario para que create_all las vea)
 
 # Crea las tablas si no existen todavía (para un proyecto de un solo usuario,
 # esto es más simple que manejar migraciones)
@@ -44,6 +44,7 @@ app.include_router(maestros.router)
 app.include_router(normalizacion.router)
 app.include_router(impresion.router)
 app.include_router(control.router)
+app.include_router(verificacion.router)
 app.include_router(carga_inicial.router)
 
 

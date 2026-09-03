@@ -137,6 +137,22 @@ class BienAlta(Base):
     centro_costo = relationship("CentroCosto")
 
 
+class VerificacionPecosaSiga(Base):
+    """Último reporte patrimonial de SIGA usado para validar una pecosa.
+
+    El año y el número de pecosa se conservan en columnas distintas. El año
+    proviene de fecha_alta del reporte SIGA, por lo que el usuario no necesita
+    ingresarlo al registrar una pecosa en la aplicación.
+    """
+    __tablename__ = "verificacion_pecosas_siga"
+
+    id = Column(Integer, primary_key=True)
+    codigo_patrimonial = Column(String(20), unique=True, nullable=False, index=True)
+    nro_pecosa = Column(String(50), nullable=True, index=True)
+    anio_siga = Column(String(4), nullable=True, index=True)
+    importado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class CorreccionAsignacionBien(Base):
     """Historial de los traslados de un bien entre pecosas.
 

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block titulo %}Verificación de Pecosas{% endblock %}
+{% block contenido %}
+<h3 class="mb-4">Verificación de Pecosas</h3>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+{% if request.query_params.get("info") %}
+<div class="alert alert-success">{{ request.query_params.get("info") }}</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5>Importar reporte patrimonial SIGA</h5>
+        <p class="text-muted mb-3">
+            Sube el reporte completo de bienes muebles de SIGA. Se cruza el Código Patrimonial
+            con el registro de altas y se toma la Pecosa real y el Año desde <code>nro_pecosa</code>
+            y <code>fecha_alta</code>. Cada carga reemplaza el reporte anterior.
+        </p>
+        <form method="post" action="/verificacion/importar" enctype="multipart/form-data" class="d-flex gap-2">
+            <input type="file" name="archivo" accept=".xls,.xlsx" class="form-control" style="max-width: 420px;" required>
+            <button type="submit" class="btn btn-primary">Importar / actualizar</button>
+        </form>
+        {% if ultimo_reporte %}
+        <p class="text-muted small mt-3 mb-0">
+            Último reporte cargado: {{ total_reporte }} bien(es). Actualizado: {{ ultimo_reporte.importado_en }}.
+        </p>
+        {% endif %}
+    </div>
+</div>
+
+{% if total_reporte %}
+<div class="row mb-4">
+    {% for item in estados %}
+    <div class="col-md-3 mb-2">
+        <div class="card text-center h-100">
+            <div class="card-body py-2">
+                <div class="fs-4">{{ resumen.get(item, 0) }}</div>
+                <div class="text-muted small">{{ item }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form method="get" action="/verificacion" class="row g-2">
+            <div class="col-md-3"><input name="codigo" value="{{ filtros.codigo }}" class="form-control form-control-sm" placeholder="Código patrimonial"></div>
+            <div class="col-md-2"><input name="pecosa" value="{{ filtros.pecosa }}" class="form-control form-control-sm" placeholder="Pecosa alta o real"></div>
+            <div class="col-md-2">
+                <select name="lote" class="form-select form-select-sm">
+                    <option value="">Todos los lotes</option>
+                    {% for numero in lotes %}<option value="{{ numero }}" {{ "selected" if filtros.lote == numero else "" }}>Lote {{ numero }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2"><input name="expediente" value="{{ filtros.expediente }}" class="form-control form-control-sm" placeholder="Expediente"></div>
+            <div class="col-md-2">
+                <select name="estado" class="form-select form-select-sm">
+                    <option value="">Todos los estados</option>
+                    {% for item in estados %}<option value="{{ item }}" {{ "selected" if filtros.estado == item else "" }}>{{ item }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary">Buscar</button>
+                <a href="/verificacion" class="btn btn-sm btn-outline-secondary">Limpiar</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<p class="text-muted small">Mostrando {{ filas|length }} de {{ total_bienes }} bien(es) registrados. Las inconsistencias aparecen primero.</p>
+<div class="table-responsive">
+<table class="table table-sm table-hover bg-white">
+    <thead>
+        <tr>
+            <th>Código Patrimonial</th><th>Descripción</th><th>Año lote</th><th>Pecosa de alta</th>
+            <th>Año SIGA</th><th>Pecosa real</th><th>Lote</th><th>Expediente</th>
+            <th>Estado Control</th><th>Verificación</th><th>Motivo</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for fila in filas %}
+        <tr>
+            <td>{{ fila.codigo_patrimonial }}</td><td>{{ fila.descripcion }}</td>
+            <td>{{ fila.anio_lote or "-" }}</td><td>{{ fila.pecosa_alta or "-" }}</td>
+            <td>{{ fila.anio_siga or "-" }}</td><td>{{ fila.pecosa_real or "-" }}</td>
+            <td>{{ fila.lote or "-" }}</td><td>{{ fila.expediente or "-" }}</td>
+            <td>{{ fila.estado_control }}</td>
+            <td>
+                {% if fila.estado == "PECOSA CORRECTA" %}<span class="badge bg-success">{{ fila.estado }}</span>
+                {% elif fila.estado == "PECOSA INCORRECTA" %}<span class="badge bg-danger">{{ fila.estado }}</span>
+                {% elif fila.estado == "SIN VERIFICAR" %}<span class="badge bg-secondary">{{ fila.estado }}</span>
+                {% else %}<span class="badge bg-warning text-dark">{{ fila.estado }}</span>{% endif %}
+            </td>
+            <td>{{ fila.motivo }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="text-muted">Importa el reporte patrimonial completo de SIGA para iniciar la verificación de los {{ total_bienes }} bienes registrados.</p>
+{% endif %}
+{% endblock %}

@@ -14,13 +14,17 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
-    LoteCarga, Persona, RelacionPecosaItem,
+    LoteCarga, Persona, RelacionPecosaItem, VerificacionPecosaSiga,
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import ESTADO_EXCESO, _calcular_control, _mover_bien_a_pecosa
 from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
+from app.services.excel_verificacion import leer_reporte_verificacion
+from app.routers.verificacion import (
+    ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
+)
 
 
 class ValidacionCargaInicialTest(unittest.TestCase):
@@ -172,6 +176,67 @@ class FormatoImportacionOneVisionTest(unittest.TestCase):
             libro.xf_list[hoja.cell_xf_index(4, 0)].background.pattern_colour_index,
             0,
         )
+
+
+class VerificacionPecosasTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        expediente = Expediente(numero="50001")
+        lote = LoteCarga(anio="2026", ejecutora="785", pecosas_solicitadas="2473")
+        self.db.add_all([expediente, lote])
+        self.db.flush()
+        pecosa = Pecosa(numero="2473", expediente_id=expediente.id, estado="Firmada")
+        self.db.add(pecosa)
+        self.db.flush()
+        self.db.add_all([
+            BienAlta(
+                pecosa_id=pecosa.id, lote_id=lote.id,
+                codigo_patrimonial="740899502037", descripcion="BIEN DE PRUEBA",
+            ),
+            RelacionPecosaItem(nro_pecosa="2473", ano_eje="2026", cant_aprobada=1),
+            VerificacionPecosaSiga(
+                codigo_patrimonial="740899502037", nro_pecosa="2473", anio_siga="2026",
+            ),
+        ])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_verifica_pecosa_y_anio_en_columnas_independientes(self):
+        fila = _filas_verificacion(self.db)[0]
+        self.assertEqual(fila["estado"], ESTADO_CORRECTA)
+        self.assertEqual(fila["anio_lote"], "2026")
+        self.assertEqual(fila["anio_siga"], "2026")
+        self.assertEqual(fila["pecosa_alta"], "2473")
+        self.assertEqual(fila["pecosa_real"], "2473")
+
+        registro = self.db.query(VerificacionPecosaSiga).one()
+        registro.nro_pecosa = "2474"
+        self.db.commit()
+        self.assertEqual(_filas_verificacion(self.db)[0]["estado"], ESTADO_INCORRECTA)
+
+    def test_lee_reporte_xls_con_anio_separado(self):
+        libro = xlwt.Workbook()
+        hoja = libro.add_sheet("SIGA")
+        for columna, valor in enumerate(["codigo_patrimonial", "nro_pecosa", "fecha_alta"]):
+            hoja.write(0, columna, valor)
+        hoja.write(1, 0, "740899502037")
+        hoja.write(1, 1, "2473")
+        hoja.write(1, 2, "27/08/2026 00:00:00")
+        descriptor, ruta = tempfile.mkstemp(suffix=".xls")
+        os.close(descriptor)
+        try:
+            libro.save(ruta)
+            reporte = leer_reporte_verificacion(ruta)
+        finally:
+            os.remove(ruta)
+
+        self.assertEqual(reporte.iloc[0]["codigo_patrimonial"], "740899502037")
+        self.assertEqual(reporte.iloc[0]["nro_pecosa"], "2473")
+        self.assertEqual(reporte.iloc[0]["anio_siga"], "2026")
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

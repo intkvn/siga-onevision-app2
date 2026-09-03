@@ -1,8 +1,11 @@
 import os
 import tempfile
 import unittest
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import xlrd
 import xlwt
 import pandas as pd
 from sqlalchemy import create_engine
@@ -17,6 +20,7 @@ from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import ESTADO_EXCESO, _calcular_control, _mover_bien_a_pecosa
 from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
+from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
 
 
 class ValidacionCargaInicialTest(unittest.TestCase):
@@ -131,6 +135,43 @@ class LecturaRelacionPecosasXlsTest(unittest.TestCase):
         self.assertEqual(list(resultado.columns), COLUMNAS_NECESARIAS)
         self.assertEqual(len(resultado), 1)
         self.assertEqual(resultado.iloc[0]["cant_aprobada"], 1)
+
+
+class FormatoImportacionOneVisionTest(unittest.TestCase):
+    def test_generar_archivo_con_qr_y_formato_vigente(self):
+        bien = SimpleNamespace(
+            codigo_qr="QR-001",
+            codigo_patrimonial="740899502020",
+            descripcion="UNIDAD CENTRAL",
+            fecha_alta=date(2026, 6, 22),
+            modelo="M90",
+            marca="LENOVO",
+            estado_conservacion="Bueno",
+            nro_serie="SN001",
+            pecosa=SimpleNamespace(numero="1417"),
+            centro_costo=SimpleNamespace(ipress="4451"),
+            persona=SimpleNamespace(dni="44797419"),
+        )
+        descriptor, ruta = tempfile.mkstemp(suffix=".xls")
+        os.close(descriptor)
+        try:
+            generar_formato_importacion([bien], "2026", "785", ruta)
+            libro = xlrd.open_workbook(ruta, formatting_info=True)
+            hoja = libro.sheet_by_index(0)
+        finally:
+            os.remove(ruta)
+
+        self.assertEqual(hoja.ncols, 16)
+        self.assertEqual(hoja.row_values(4), ENCABEZADOS)
+        self.assertEqual(hoja.cell_value(7, 0), "QR-001")
+        self.assertEqual(hoja.cell_value(7, 1), "2026")
+        self.assertEqual(hoja.cell_value(7, 2), "785")
+        self.assertEqual(hoja.cell_value(7, 5), "740899502020")
+        self.assertEqual(hoja.cell_value(7, 12), "1417")
+        self.assertNotEqual(
+            libro.xf_list[hoja.cell_xf_index(4, 0)].background.pattern_colour_index,
+            0,
+        )
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

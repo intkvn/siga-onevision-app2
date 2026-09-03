@@ -1,6 +1,7 @@
 import os
 import tempfile
 from collections import defaultdict
+from datetime import datetime
 
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
@@ -9,7 +10,10 @@ from sqlalchemy.orm import Session
 from openpyxl import Workbook
 
 from app.database import get_db
-from app.models import RelacionPecosaItem, Pecosa, BienAlta, CorreccionAsignacionBien
+from app.models import (
+    RelacionPecosaItem, Pecosa, BienAlta, CorreccionAsignacionBien,
+    ObservacionControlPecosa,
+)
 from app.auth import requiere_login
 from app.services.excel_relacion_pecosas import leer_relacion_pecosas
 
@@ -21,21 +25,32 @@ ESTADO_PARCIAL = "Ingresada parcial en SIGA"
 ESTADO_EXCESO = "Inconsistencia: bienes de más"
 ESTADO_FALTA_FIRMA = "Ingresado a SIGA y OVC (falta firma)"
 ESTADO_COMPLETA = "Firmada/Completa"
+ESTADO_OBSERVADA = "Observada"
+CAUSALES_OBSERVACION = [
+    "No corresponde a activo fijo",
+    "Transferencia a otra RIS/unidad ejecutora",
+    "Otra",
+]
 
 
 def _calcular_control(db: Session) -> list[dict]:
-    """Arma, por cada N° de pecosa que aparece en la Relación de Pecosas
-    de SIGA, cuánto se esperaba, cuánto se ha ingresado en nuestro
-    sistema, y en qué estado está."""
+    """Arma el control por año y N° de pecosa, en columnas separadas."""
     items = db.query(RelacionPecosaItem).all()
     por_pecosa = defaultdict(list)
     for it in items:
-        por_pecosa[it.nro_pecosa].append(it)
+        clave = (str(it.ano_eje or "").strip(), it.nro_pecosa)
+        por_pecosa[clave].append(it)
 
     pecosas_db = {p.numero: p for p in db.query(Pecosa).all()}
+    observaciones = {
+        (observacion.ano_eje, observacion.nro_pecosa): observacion
+        for observacion in db.query(ObservacionControlPecosa).filter(
+            ObservacionControlPecosa.activa == 1
+        ).all()
+    }
 
     filas = []
-    for nro_pecosa, lineas in por_pecosa.items():
+    for (ano_eje, nro_pecosa), lineas in por_pecosa.items():
         cantidad_esperada = sum(l.cant_aprobada or 0 for l in lineas)
         pecosa = pecosas_db.get(nro_pecosa)
         cantidad_ingresada = 0
@@ -45,7 +60,10 @@ def _calcular_control(db: Session) -> list[dict]:
             cantidad_ingresada = len(bienes_pecosa)
             lotes = sorted({bien.lote_id for bien in bienes_pecosa if bien.lote_id is not None})
 
-        if pecosa is None:
+        observacion = observaciones.get((ano_eje, nro_pecosa))
+        if observacion:
+            estado = ESTADO_OBSERVADA
+        elif pecosa is None:
             estado = ESTADO_PENDIENTE_ALMACEN
         elif cantidad_ingresada > cantidad_esperada:
             estado = ESTADO_EXCESO
@@ -59,7 +77,7 @@ def _calcular_control(db: Session) -> list[dict]:
         primera = lineas[0]
         filas.append({
             "nro_pecosa": nro_pecosa,
-            "ano_eje": primera.ano_eje,
+            "ano_eje": ano_eje,
             "nombre_depend": primera.nombre_depend,
             "fecha_pecosa": primera.fecha_pecosa,
             "lotes": lotes,
@@ -72,12 +90,16 @@ def _calcular_control(db: Session) -> list[dict]:
             "expediente_alta": pecosa.expediente.numero if pecosa and pecosa.expediente else None,
             "expediente_firma": pecosa.expediente_firma if pecosa else None,
             "lineas": lineas,
+            "observacion": observacion,
         })
 
     def _numero_para_orden(nro_pecosa: str) -> int:
         return int(nro_pecosa) if nro_pecosa.isdigit() else -1
 
-    filas.sort(key=lambda f: _numero_para_orden(f["nro_pecosa"]), reverse=True)
+    filas.sort(
+        key=lambda f: (f["ano_eje"], _numero_para_orden(f["nro_pecosa"])),
+        reverse=True,
+    )
     return filas
 
 
@@ -108,8 +130,9 @@ def ver_control(
             "pecosas_db": pecosas_db,
             "estados": [
                 ESTADO_PENDIENTE_ALMACEN, ESTADO_PARCIAL, ESTADO_EXCESO,
-                ESTADO_FALTA_FIRMA, ESTADO_COMPLETA,
+                ESTADO_FALTA_FIRMA, ESTADO_COMPLETA, ESTADO_OBSERVADA,
             ],
+            "causales_observacion": CAUSALES_OBSERVACION,
             "filtros": {"numero": numero, "estado": estado},
         },
     )
@@ -167,6 +190,92 @@ async def importar_relacion_pecosas(
         ))
     db.commit()
     return RedirectResponse(url="/control", status_code=303)
+
+
+def _clave_control(valor: str) -> tuple[str, str] | None:
+    """Convierte el valor oculto 'año|pecosa' en dos campos independientes."""
+    if "|" not in valor:
+        return None
+    anio, numero = (parte.strip() for parte in valor.split("|", 1))
+    return (anio, numero) if anio and numero else None
+
+
+@router.post("/control/observar")
+def observar_pecosas(
+    claves: list[str] = Form(...),
+    causal: str = Form(...),
+    sustento: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    sustento = sustento.strip()
+    if causal not in CAUSALES_OBSERVACION or not sustento:
+        return RedirectResponse(
+            url="/control?error=Selecciona+una+causal+y+escribe+el+sustento+de+la+observaci%C3%B3n",
+            status_code=303,
+        )
+
+    pendientes = {
+        (fila["ano_eje"], fila["nro_pecosa"]): fila
+        for fila in _calcular_control(db)
+        if fila["estado"] == ESTADO_PENDIENTE_ALMACEN
+    }
+    seleccionadas = {_clave_control(valor) for valor in claves}
+    seleccionadas.discard(None)
+    validas = seleccionadas.intersection(pendientes)
+    if not validas:
+        return RedirectResponse(
+            url="/control?error=Selecciona+al+menos+una+pecosa+pendiente+para+observar",
+            status_code=303,
+        )
+
+    existentes = {
+        (fila.ano_eje, fila.nro_pecosa): fila
+        for fila in db.query(ObservacionControlPecosa).filter(
+            ObservacionControlPecosa.ano_eje.in_([clave[0] for clave in validas]),
+            ObservacionControlPecosa.nro_pecosa.in_([clave[1] for clave in validas]),
+        ).all()
+    }
+    for anio, numero in validas:
+        registro = existentes.get((anio, numero))
+        if registro:
+            registro.causal = causal
+            registro.sustento = sustento
+            registro.activa = 1
+            registro.observada_en = datetime.utcnow()
+            registro.restituida_en = None
+        else:
+            db.add(ObservacionControlPecosa(
+                ano_eje=anio, nro_pecosa=numero, causal=causal, sustento=sustento,
+            ))
+    db.commit()
+    return RedirectResponse(
+        url=f"/control?info=Se+observaron+{len(validas)}+pecosa%28s%29",
+        status_code=303,
+    )
+
+
+@router.post("/control/restituir-observacion")
+def restituir_observacion(
+    ano_eje: str = Form(...),
+    nro_pecosa: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    registro = db.query(ObservacionControlPecosa).filter(
+        ObservacionControlPecosa.ano_eje == ano_eje.strip(),
+        ObservacionControlPecosa.nro_pecosa == nro_pecosa.strip(),
+        ObservacionControlPecosa.activa == 1,
+    ).first()
+    if registro is None:
+        return RedirectResponse(url="/control?error=No+se+encontr%C3%B3+la+observaci%C3%B3n+activa", status_code=303)
+    registro.activa = 0
+    registro.restituida_en = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(
+        url=f"/control?info=La+pecosa+{registro.nro_pecosa}+volvi%C3%B3+a+Pendiente+env%C3%ADo+almac%C3%A9n",
+        status_code=303,
+    )
 
 
 def _cantidad_esperada(db: Session, numero_pecosa: str) -> int:
@@ -335,13 +444,15 @@ def exportar_control(db: Session = Depends(get_db), _=Depends(requiere_login)):
     hoja1.append([
         "ano_eje", "Numero pecosa", "fecha_pecosa", "nombre_depend", "motivo_pedido",
         "clasificador", "Cant. Esperada", "Cant. Ingresada", "Responsable",
-        "Nro Expediente Alta", "Nro Expediente Firma", "Estado",
+        "Nro Expediente Alta", "Nro Expediente Firma", "Estado", "Causal", "Observación",
     ])
     for f in filas_control:
         hoja1.append([
             f["ano_eje"], f["nro_pecosa"], f["fecha_pecosa"], f["nombre_depend"], f["motivo_pedido"],
             f["lineas"][0].clasificador if f["lineas"] else "", f["cantidad_esperada"], f["cantidad_ingresada"],
             f["firmante"] or "", f["expediente_alta"] or "", f["expediente_firma"] or "", f["estado"],
+            f["observacion"].causal if f["observacion"] else "",
+            f["observacion"].sustento if f["observacion"] else "",
         ])
 
     # --- Hoja 2: solo los bienes que ya tienen QR generado ---

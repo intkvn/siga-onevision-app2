@@ -15,9 +15,13 @@ from app.database import Base
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
     LoteCarga, Persona, RelacionPecosaItem, VerificacionPecosaSiga,
+    ObservacionControlPecosa,
 )
 from app.routers.carga_inicial import _estado_maestros
-from app.routers.control import ESTADO_EXCESO, _calcular_control, _mover_bien_a_pecosa
+from app.routers.control import (
+    ESTADO_EXCESO, ESTADO_OBSERVADA, ESTADO_PENDIENTE_ALMACEN,
+    _calcular_control, _mover_bien_a_pecosa,
+)
 from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
@@ -237,6 +241,33 @@ class VerificacionPecosasTest(unittest.TestCase):
         self.assertEqual(reporte.iloc[0]["codigo_patrimonial"], "740899502037")
         self.assertEqual(reporte.iloc[0]["nro_pecosa"], "2473")
         self.assertEqual(reporte.iloc[0]["anio_siga"], "2026")
+
+
+class ObservacionControlPecosaTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        self.db.add(RelacionPecosaItem(
+            nro_pecosa="36", ano_eje="2026", cant_aprobada=1,
+        ))
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_observacion_excluye_pendiente_por_anio_y_pecosa(self):
+        self.assertEqual(_calcular_control(self.db)[0]["estado"], ESTADO_PENDIENTE_ALMACEN)
+        self.db.add(ObservacionControlPecosa(
+            ano_eje="2026", nro_pecosa="36",
+            causal="Transferencia a otra RIS/unidad ejecutora",
+            sustento="La RIS maneja su propio SIGA.",
+        ))
+        self.db.commit()
+
+        fila = _calcular_control(self.db)[0]
+        self.assertEqual(fila["estado"], ESTADO_OBSERVADA)
+        self.assertEqual(fila["observacion"].sustento, "La RIS maneja su propio SIGA.")
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

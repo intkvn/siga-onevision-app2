@@ -8,7 +8,7 @@ LoteCarga agrupa un envío de normalización/carga a One Visión.
 """
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Date, DateTime, ForeignKey, Text
+    Column, Integer, String, Date, DateTime, ForeignKey, Text, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -151,6 +151,26 @@ class VerificacionPecosaSiga(Base):
     nro_pecosa = Column(String(50), nullable=True, index=True)
     anio_siga = Column(String(4), nullable=True, index=True)
     importado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ObservacionControlPecosa(Base):
+    """Exclusión sustentada de una pecosa que no se procesará en SIGA DIRESA.
+
+    Se identifica por año y número en campos separados. La pecosa no se crea
+    en el flujo de normalización, porque una observación no es un registro de
+    alta pendiente.
+    """
+    __tablename__ = "observaciones_control_pecosa"
+    __table_args__ = (UniqueConstraint("ano_eje", "nro_pecosa", name="uq_observacion_control_pecosa"),)
+
+    id = Column(Integer, primary_key=True)
+    ano_eje = Column(String(4), nullable=False, index=True)
+    nro_pecosa = Column(String(50), nullable=False, index=True)
+    causal = Column(String(100), nullable=False)
+    sustento = Column(Text, nullable=False)
+    activa = Column(Integer, nullable=False, default=1)
+    observada_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    restituida_en = Column(DateTime, nullable=True)
 
 
 class CorreccionAsignacionBien(Base):

@@ -62,20 +62,28 @@
 </div>
 
 <a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte completo (Excel)</a>
-<p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (el listado completo del reporte de SIGA con su estado, ideal para enviar a almacén y pedir lo que falta) y "Bienes con QR" (el detalle de cada bien que ya tiene su código QR generado).</p>
+<button type="button" class="btn btn-outline-warning mb-3" onclick="abrirObservacionSeleccionadas()">Observar pecosas seleccionadas</button>
+<p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (incluye la causal y el sustento de las observadas) y "Bienes con QR".</p>
 
 {% if filas %}
+<div class="table-responsive">
 <table class="table table-sm bg-white">
     <thead>
         <tr>
-            <th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th><th>Lote</th>
+            <th></th><th>Año</th><th>N° Pecosa</th><th>Dependencia</th><th>Fecha</th><th>Lote</th>
             <th>Esperada</th><th>Ingresada</th><th>Estado</th>
-            <th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th><th></th>
+            <th>Observación</th><th>Responsable (firma)</th><th>Exp. Alta</th><th>Exp. Firma</th><th></th>
         </tr>
     </thead>
     <tbody>
     {% for f in filas %}
         <tr>
+            <td>
+                {% if f.estado == "Pendiente envío almacén" %}
+                <input class="form-check-input seleccion-observacion" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa {{ f.nro_pecosa }}">
+                {% endif %}
+            </td>
+            <td>{{ f.ano_eje or "-" }}</td>
             <td>{{ f.nro_pecosa }}</td>
             <td>{{ f.nombre_depend }}</td>
             <td>{{ f.fecha_pecosa }}</td>
@@ -87,13 +95,28 @@
                 {% elif f.estado == "Ingresada parcial en SIGA" %}<span class="badge bg-warning text-dark">{{ f.estado }}</span>
                 {% elif f.estado == "Inconsistencia: bienes de más" %}<span class="badge bg-danger">{{ f.estado }} ({{ f.cantidad_ingresada }} de {{ f.cantidad_esperada }})</span>
                 {% elif f.estado == "Ingresado a SIGA y OVC (falta firma)" %}<span class="badge bg-primary">{{ f.estado }}</span>
+                {% elif f.estado == "Observada" %}<span class="badge bg-dark">{{ f.estado }}</span>
                 {% else %}<span class="badge bg-success">{{ f.estado }}</span>
                 {% endif %}
+            </td>
+            <td>
+                {% if f.observacion %}
+                <strong>{{ f.observacion.causal }}</strong><br><span class="small">{{ f.observacion.sustento }}</span>
+                {% else %}-{% endif %}
             </td>
             <td>{{ f.firmante or "-" }}</td>
             <td>{{ f.expediente_alta or "-" }}</td>
             <td>{{ f.expediente_firma or "-" }}</td>
             <td>
+                {% if f.estado == "Pendiente envío almacén" %}
+                <button type="button" class="btn btn-sm btn-outline-warning" onclick="abrirObservacionIndividual('{{ f.ano_eje }}', '{{ f.nro_pecosa }}')">Observar</button>
+                {% elif f.estado == "Observada" %}
+                <form method="post" action="/control/restituir-observacion" class="d-inline">
+                    <input type="hidden" name="ano_eje" value="{{ f.ano_eje }}">
+                    <input type="hidden" name="nro_pecosa" value="{{ f.nro_pecosa }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Restituir a pendiente</button>
+                </form>
+                {% endif %}
                 {% if f.estado == "Inconsistencia: bienes de más" and f.nro_pecosa in pecosas_db %}
                 <a class="btn btn-sm btn-outline-danger" href="/control/pecosa/{{ pecosas_db[f.nro_pecosa].id }}/corregir">Corregir asignación</a>
                 {% endif %}
@@ -102,6 +125,59 @@
     {% endfor %}
     </tbody>
 </table>
+</div>
+
+<dialog id="dialog-observacion" style="max-width: 620px; border: 0; border-radius: 8px; box-shadow: 0 0 24px #666;">
+    <form method="post" action="/control/observar" id="form-observacion">
+        <h5>Observar pecosa(s)</h5>
+        <p id="resumen-seleccion" class="text-muted"></p>
+        <div id="claves-observacion"></div>
+        <div class="mb-3">
+            <label class="form-label" for="causal">Causal</label>
+            <select id="causal" name="causal" class="form-select" required>
+                <option value="">Selecciona una causal</option>
+                {% for causal in causales_observacion %}<option value="{{ causal }}">{{ causal }}</option>{% endfor %}
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" for="sustento">Sustento</label>
+            <textarea id="sustento" name="sustento" class="form-control" rows="4" required placeholder="Explica por qué esta pecosa no será ingresada en SIGA DIRESA."></textarea>
+        </div>
+        <button type="submit" class="btn btn-warning">Confirmar observación</button>
+        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('dialog-observacion').close()">Cancelar</button>
+    </form>
+</dialog>
+
+<script>
+function abrirDialogoConClaves(claves) {
+    if (!claves.length) {
+        alert('Selecciona al menos una pecosa pendiente.');
+        return;
+    }
+    const contenedor = document.getElementById('claves-observacion');
+    contenedor.replaceChildren();
+    claves.forEach((clave) => {
+        const campo = document.createElement('input');
+        campo.type = 'hidden';
+        campo.name = 'claves';
+        campo.value = clave;
+        contenedor.appendChild(campo);
+    });
+    const etiquetas = claves.map((clave) => {
+        const [anio, numero] = clave.split('|');
+        return `${numero} (${anio})`;
+    });
+    document.getElementById('resumen-seleccion').textContent = `Pecosa(s) seleccionada(s): ${etiquetas.join(', ')}`;
+    document.getElementById('dialog-observacion').showModal();
+}
+function abrirObservacionSeleccionadas() {
+    const claves = Array.from(document.querySelectorAll('.seleccion-observacion:checked')).map((campo) => campo.value);
+    abrirDialogoConClaves(claves);
+}
+function abrirObservacionIndividual(anio, numero) {
+    abrirDialogoConClaves([`${anio}|${numero}`]);
+}
+</script>
 {% else %}
 <p class="text-muted">Ningún resultado coincide con ese filtro.</p>
 {% endif %}

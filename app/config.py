@@ -1,13 +1,13 @@
 """
 Configuración central de la app.
-Todo lo que puede cambiar entre "tu compu" y "Railway" vive aquí,
+Todo lo que puede cambiar entre "tu compu" y producción vive aquí,
 leído desde variables de entorno (el archivo .env en local, o las
-variables que configures en el panel de Railway en producción).
+variables que configures en el panel de Render en producción).
 """
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # en local, lee el archivo .env; en Railway no hace falta (usa sus variables)
+load_dotenv()  # En producción, Render entrega estas variables directamente.
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./local_dev.db")
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")

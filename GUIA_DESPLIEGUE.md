@@ -1,103 +1,99 @@
-# Guía paso a paso — Poner la app en internet (gratis, con Render + Neon)
+# Publicación de SIGA One Visión con Render y Neon
 
-No necesitas saber programar para seguir esto. Son clics en páginas web.
-Tómate tu tiempo, un paso a la vez.
+Esta guía usa la base local ya preparada, por lo que no tendrás que repetir
+la carga inicial ni los registros existentes.
 
-## Por qué dos servicios distintos
+## Antes de comenzar
 
-- **Render** hospeda la aplicación (gratis, sin tarjeta de crédito). Único detalle:
-  si nadie usa la app por 15 minutos, "se duerme", y la primera visita después tarda
-  unos 30-60 segundos en responder. Para tu caso (uso personal, no una web pública
-  con visitas constantes) esto no es un problema real.
-- **Neon** hospeda la base de datos PostgreSQL, con una capa gratuita que **no expira
-  nunca** (a diferencia de la base de datos gratis de Render, que se borra a los 90 días).
+- La copia de seguridad ya fue creada en la carpeta `backups` de esta computadora.
+- La copia y la base local están bloqueadas para que GitHub nunca las publique.
+- Solo usa archivos `.xlsx` al importar reportes de Verificación en producción.
+- Mantendremos dos espacios separados: esta app local para probar cambios y la
+  app en Render para el trabajo real. Un cambio local no llega a producción hasta
+  que se publique manualmente.
 
-## Paso 1 — Crear una cuenta en GitHub (donde vivirá tu código)
+## Paso 1. Crear el proyecto de Neon
 
-1. Entra a https://github.com y crea una cuenta gratis (si no tienes una).
-2. Arriba a la derecha, haz clic en **"+"** → **"New repository"**.
-3. Nómbralo `siga-onevision-app`, márcalo como **Private**, clic en **"Create repository"**.
+1. Entra a [Neon](https://console.neon.tech/).
+2. Pulsa **New Project**.
+3. Coloca el nombre `siga-onevision-produccion`.
+4. Elige el proveedor y región que Neon te ofrezca más cercanos a la región de
+   Render. Render se configurará en Oregon.
+5. Deja el nombre de la base que Neon propone por defecto, salvo que quieras usar
+   `siga_onevision`.
+6. Pulsa **Create Project**.
+7. En el proyecto creado pulsa **Connect** y elige **Connection string**.
+8. No pegues la cadena de conexión en GitHub ni la envíes por correo. Déjala abierta
+   en Neon y avísame cuando el proyecto esté listo. La usaremos una sola vez para
+   copiar la base protegida.
 
-## Paso 2 — Subir el código a GitHub (sin usar la terminal)
+## Paso 2. Copiar los datos a Neon
 
-1. En la página de tu repositorio recién creado, busca el enlace **"uploading an existing file"**.
-2. Descomprime en tu computadora el archivo `.zip` que te compartí.
-3. Arrastra **todos los archivos y carpetas** a esa página de GitHub.
-4. Escribe "Primera versión" en "Commit changes" y confirma.
+Este paso lo haré yo desde esta computadora cuando tengas el proyecto de Neon listo.
+La herramienta preparada para ello:
 
-## Paso 3 — Crear tu base de datos gratis en Neon
+- crea las tablas necesarias;
+- se detiene si encuentra datos previos en Neon, para evitar duplicados;
+- compara la cantidad de registros de cada tabla al terminar;
+- nunca modifica la base SQLite local ni la copia de seguridad.
 
-1. Entra a https://neon.com y crea una cuenta gratis (puedes usar tu cuenta de GitHub).
-2. Crea un nuevo proyecto (te va a pedir un nombre — puedes poner `siga-onevision`).
-3. Neon te muestra un **Connection string** parecido a:
-   `postgresql://usuario:clave@ep-xxxx.neon.tech/neondb?sslmode=require`
-4. **Cópialo y guárdalo** — lo vas a necesitar en el Paso 5. (Puedes volver a verlo
-   cuando quieras desde el dashboard de Neon, en "Connection Details".)
+Al finalizar revisaremos juntos que existan, como mínimo, los maestros, 382 pecosas,
+22 lotes y 582 bienes que contiene la copia preparada hoy.
 
-## Paso 4 — Crear tu app en Render
+## Paso 3. Crear el servicio en Render
 
-1. Entra a https://render.com y crea una cuenta gratis (puedes usar tu cuenta de GitHub).
-2. Haz clic en **"New"** → **"Web Service"**.
-3. Conecta tu cuenta de GitHub y elige el repositorio `siga-onevision-app`.
-4. En la configuración:
-   - **Name:** `siga-onevision-app` (o el nombre que quieras)
-   - **Region:** la más cercana a Perú (Oregon, US West, suele ser la más rápida)
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-   - **Instance Type:** **Free**
-5. Todavía no le des "Create" — antes bajemos a configurar las variables (paso 5).
+Haz este paso después de que confirmemos la copia a Neon.
 
-## Paso 5 — Configurar tus variables de entorno
-
-En la misma pantalla de creación (sección "Environment Variables"), agrega:
+1. Entra a [Render](https://dashboard.render.com/).
+2. Pulsa **New** y luego **Blueprint**.
+3. Conecta GitHub si Render te lo solicita y elige el repositorio
+   `intkvn/siga-onevision-app2`.
+4. Render detectará el archivo `render.yaml` que ya está preparado en el repositorio.
+5. Verifica estos datos antes de crear:
+   - Servicio: `siga-onevision-app`.
+   - Tipo: **Web Service**.
+   - Entorno: **Python**.
+   - Región: **Oregon**.
+   - Plan: **Free**.
+6. Render te pedirá valores secretos. Completa:
 
 | Variable | Valor |
-|---|---|
-| `DATABASE_URL` | El connection string que copiaste de Neon en el Paso 3 |
-| `APP_USERNAME` | El usuario con el que vas a entrar (ej. `admin`) |
-| `APP_PASSWORD` | Una contraseña que solo tú conozcas |
-| `SECRET_KEY` | Cualquier texto largo y random (ej. escribe cualquier cosa de 40 caracteres) |
-| `EJECUTORA` | `785` |
-| `ANIO_INVENTARIO` | `2026` |
+| --- | --- |
+| `DATABASE_URL` | La cadena de conexión de Neon del Paso 1. |
+| `APP_USERNAME` | Tu usuario de ingreso. |
+| `APP_PASSWORD` | Tu contraseña de ingreso. |
 
-Ahora sí, haz clic en **"Create Web Service"**. Render va a instalar todo y arrancar
-la app — la primera vez tarda unos minutos.
+`SECRET_KEY` se genera automáticamente. `EJECUTORA`, `ANIO_INVENTARIO` y la versión
+de Python ya vienen definidos en la configuración.
 
-## Paso 6 — Entrar a tu app
+7. Pulsa **Apply** o **Create Blueprint**.
+8. Espera a que el despliegue termine con estado **Live**.
+9. Abre la dirección que Render muestra y agrega `/health` al final. Debe mostrar
+   `{"status":"ok"}`. Luego abre la misma dirección sin `/health` e ingresa a la app.
 
-1. Cuando el deploy termine (estado "Live"), Render te muestra tu link, algo como
-   `https://siga-onevision-app.onrender.com`.
-2. Entra a ese link — deberías ver la pantalla de **login**. Usa el usuario y
-   contraseña que configuraste en el Paso 5.
+## Verificación posterior a la publicación
 
-¡Listo! Ya tienes la app funcionando en internet, gratis.
+1. Comprueba que veas los maestros, las pecosas, los lotes y los bienes ya existentes.
+2. Registra una pecosa de prueba solo si tienes un caso real pendiente.
+3. Genera un archivo de Normalización y verifica que descargue correctamente.
+4. Revisa Control General y Verificación.
+5. Si aparece un error, copia el texto de la sección **Logs** de Render y envíamelo.
 
-## Paso 7 — Primeros pasos dentro de la app
+## Trabajo futuro sin arriesgar producción
 
-1. Ve a **Maestros** y sube tus archivos `CENTROS_DE_COSTO.xlsx` y `usuarios_responsable.xlsx`
-   para cargar los maestros iniciales.
-2. Ve a **Pecosas** y registra las pecosas que te lleguen (con su expediente).
-3. Ve a **Normalización**, sube el reporte de SIGA y elige las pecosas del lote.
-4. Corrige manualmente cualquier bien que no haya cruzado bien (te lo marca en amarillo).
-5. Genera el archivo `.xls` y súbelo tú mismo a One Visión (eso sigue siendo manual,
-   porque One Visión no tiene una forma automática de recibir datos).
-6. Descarga el reporte de QR de One Visión y súbelo en **Impresión QR**, eligiendo el lote
-   correspondiente — te devuelve el archivo listo para BarTender y para imprimir en físico.
+La recomendación para esta etapa es trabajar primero en la copia local, como hemos
+hecho hasta ahora. Cuando un cambio esté comprobado localmente, se publica en GitHub.
+El despliegue automático está desactivado, así que la versión de producción solo
+cambiará cuando pulses **Manual Deploy** en Render y elijas la última versión.
 
-## Paso 8 (opcional, más adelante) — Conectar BarTender directo a la base de datos
+Antes de publicar cambios que afecten datos, haremos una copia de Neon y revisaremos
+la actualización en local. Evita utilizar la base SQLite de Render: en el plan Free,
+los archivos locales se pierden cuando el servicio se reinicia o se suspende. La base
+de datos persistente es Neon.
 
-Documentado en `sql/vista_bartender.sql`. Con Neon, la conexión ODBC funciona igual
-que con cualquier Postgres — solo asegúrate de incluir `sslmode=require` en la
-configuración del driver, porque Neon exige conexión cifrada.
+## Qué esperar del plan gratuito
 
----
-
-## Si algo no funciona
-
-- Si la página no carga o tarda mucho: es normal si nadie la usó en un rato (Render
-  "duerme" la app gratis); espera 30-60 segundos y recarga.
-- Si dice "usuario o contraseña incorrectos": revisa que `APP_USERNAME` y `APP_PASSWORD`
-  en Render sean exactamente lo que estás escribiendo.
-- Si el deploy falla: en Render, entra a la pestaña **"Logs"** de tu servicio — ahí
-  sale el error en texto. Cópiamelo y seguimos revisando juntos.
-- Cualquier error, cópiame el mensaje que te sale y seguimos desde ahí.
+Render puede suspender un servicio Free después de 15 minutos sin solicitudes; la
+primera visita posterior puede tardar alrededor de un minuto. Esto no afecta la base
+de Neon. Si en el futuro necesitas que la app responda siempre sin espera inicial,
+será necesario evaluar un plan de pago.

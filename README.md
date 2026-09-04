@@ -22,7 +22,7 @@ app/
   templates/         → las páginas HTML
 sql/
   vista_bartender.sql → vista de solo lectura para conectar BarTender directo
-GUIA_DESPLIEGUE.md   → guía paso a paso para publicar la app gratis (Railway)
+GUIA_DESPLIEGUE.md   → guía paso a paso para publicar la app con Render + Neon
 ```
 
 ## Cómo empezar

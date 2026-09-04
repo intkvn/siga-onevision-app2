@@ -1,0 +1,16 @@
+# Datos y credenciales locales: nunca se publican en GitHub.
+.env
+.env.*
+!.env.example
+local_dev.db
+*.db
+*.sqlite
+backups/
+
+# Entorno y archivos generados por Python.
+.venv/
+__pycache__/
+*.py[cod]
+
+# Archivos del sistema operativo.
+.DS_Store

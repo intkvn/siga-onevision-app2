@@ -50,6 +50,12 @@ app.include_router(verificacion.router)
 app.include_router(carga_inicial.router)
 
 
+@app.get("/health")
+def health_check():
+    """Respuesta pública mínima para comprobar que el servicio está activo."""
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def inicio(request: Request, _=Depends(requiere_login)):
     return RedirectResponse(url="/pecosas")

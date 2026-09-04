@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import DATABASE_URL
 
-# Railway a veces entrega la URL como "postgres://..." y SQLAlchemy
+# Algunos proveedores entregan la URL como "postgres://..." y SQLAlchemy
 # moderno exige "postgresql://..." — lo corregimos automáticamente.
 db_url = DATABASE_URL
 if db_url.startswith("postgres://"):

@@ -172,6 +172,8 @@ def ver_control(
             "numero": fila["nro_pecosa"],
             "ano": fila["ano_eje"],
             "estado": fila["estado"],
+            "firmante": fila["firmante"],
+            "expediente_firma": fila["expediente_firma"],
             "seleccionable": bool(
                 fila["pecosa_id"] and fila["estado"] == ESTADO_FALTA_FIRMA
             ),
@@ -257,9 +259,19 @@ def asignar_expediente_firma(
         for pecosa in db.query(Pecosa).filter(Pecosa.numero.in_(numeros)).all()
     }
     actualizadas = []
+    ya_firmadas = []
     for anio, numero in seleccionadas:
         pecosa = pecosas.get(numero)
-        if pecosa is None or pecosa.estado == "Firmada":
+        if pecosa is None:
+            continue
+        if pecosa.firmante or pecosa.estado == "Firmada":
+            ya_firmadas.append({
+                "id": pecosa.id,
+                "numero": pecosa.numero,
+                "anio": anio,
+                "firmante": pecosa.firmante or "(sin nombre registrado)",
+                "expediente_firma": pecosa.expediente_firma or "",
+            })
             continue
         pecosa.expediente_firma = expediente_firma
         actualizadas.append({
@@ -268,13 +280,13 @@ def asignar_expediente_firma(
             "anio": anio,
             "expediente_firma": expediente_firma,
         })
-    if not actualizadas:
+    if not actualizadas and not ya_firmadas:
         return JSONResponse(
             {"ok": False, "error": "Las pecosas seleccionadas no pueden recibir el expediente."},
             status_code=400,
         )
     db.commit()
-    return JSONResponse({"ok": True, "pecosas": actualizadas})
+    return JSONResponse({"ok": True, "pecosas": actualizadas, "ya_firmadas": ya_firmadas})
 
 
 @router.post("/control/confirmar-firmantes")

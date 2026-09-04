@@ -228,6 +228,7 @@
     <form method="post" action="/control/confirmar-firmantes" id="form-firmantes">
         <h5>Asignar firmantes</h5>
         <p class="text-muted">Selecciona un firmante para cada pecosa. La búsqueda se realiza por nombre o DNI.</p>
+        <div id="firmantes-ya-registrados" class="alert alert-warning d-none"></div>
         <div class="table-responsive">
             <table class="table table-sm align-middle" style="min-width: 720px;">
                 <thead><tr><th>Pecosa</th><th>Año</th><th>Expediente firma</th><th style="min-width: 300px;">Firmante</th></tr></thead>
@@ -284,7 +285,7 @@ function seleccionarListaPecosas() {
     if (!texto) { resultado.textContent = 'Pega al menos un número de pecosa.'; resultado.className = 'small mt-2 text-danger'; return; }
     const tokens = texto.split(/[\s,;]+/).map((token) => token.trim()).filter(Boolean);
     const actuales = leerSeleccionesFirma();
-    const seleccionadas = [], noEncontradas = [], ambiguas = [], noDisponibles = [];
+    const seleccionadas = [], yaFirmadas = [], noEncontradas = [], ambiguas = [], noDisponibles = [];
     const vistos = new Set();
     tokens.forEach((token) => {
         let anio = anioGeneral;
@@ -297,13 +298,22 @@ function seleccionarListaPecosas() {
         if (!coincidencias.length) { noEncontradas.push(numero); return; }
         if (coincidencias.length > 1 && !anio) { ambiguas.push(`${numero} (${coincidencias.map((fila) => fila.ano).join(', ')})`); return; }
         const fila = coincidencias[0];
-        if (!fila.seleccionable) { noDisponibles.push(`${numero} (${fila.estado})`); return; }
+        if (!fila.seleccionable) {
+            if (fila.firmante || fila.estado === 'Firmada/Completa') {
+                actuales.add(fila.clave);
+                yaFirmadas.push(`${numero} (${fila.ano}: ${fila.firmante || 'firmante registrado'})`);
+            } else {
+                noDisponibles.push(`${numero} (${fila.estado})`);
+            }
+            return;
+        }
         actuales.add(fila.clave); seleccionadas.push(`${numero} (${fila.ano})`);
     });
     guardarSeleccionesFirma(actuales);
     document.querySelectorAll('.seleccion-firma').forEach((campo) => campo.checked = actuales.has(campo.value));
     const partes = [];
     if (seleccionadas.length) partes.push(`Seleccionadas: ${seleccionadas.join(', ')}`);
+    if (yaFirmadas.length) partes.push(`Ya tienen firmante: ${yaFirmadas.join(', ')}`);
     if (noEncontradas.length) partes.push(`No encontradas: ${noEncontradas.join(', ')}`);
     if (ambiguas.length) partes.push(`Indica el año para: ${ambiguas.join(', ')}`);
     if (noDisponibles.length) partes.push(`No disponibles: ${noDisponibles.join(', ')}`);
@@ -358,16 +368,23 @@ document.getElementById('form-expediente-firma').addEventListener('submit', asyn
         }
         firmantesPendientes = datos.pecosas;
         formulario.closest('dialog').close();
-        mostrarVentanaFirmantes(firmantesPendientes);
+        mostrarVentanaFirmantes(firmantesPendientes, datos.ya_firmadas || []);
     } catch (_) {
         alert('No se pudo conectar con el servidor.');
     } finally { boton.disabled = false; }
 });
 
-function mostrarVentanaFirmantes(pecosas) {
+function mostrarVentanaFirmantes(pecosas, yaFirmadas = []) {
     const cuerpo = document.getElementById('filas-firmantes');
     const error = document.getElementById('error-firmantes');
+    const avisoFirmadas = document.getElementById('firmantes-ya-registrados');
     error.classList.add('d-none');
+    avisoFirmadas.classList.add('d-none');
+    avisoFirmadas.textContent = '';
+    if (yaFirmadas.length) {
+        avisoFirmadas.textContent = 'Ya tienen firmante registrado: ' + yaFirmadas.map((pecosa) => `${pecosa.numero} (${pecosa.anio}): ${pecosa.firmante}`).join(', ') + '. No se modificarán.';
+        avisoFirmadas.classList.remove('d-none');
+    }
     cuerpo.replaceChildren();
     pecosas.forEach((pecosa) => {
         const fila = document.createElement('tr');
@@ -400,6 +417,7 @@ document.getElementById('form-firmantes').addEventListener('submit', async (even
     const campos = Array.from(document.querySelectorAll('.firmante-modal'));
     const datos = campos.map((campo) => ({id: Number(campo.dataset.id), firmante: campo.value.trim()}));
     const error = document.getElementById('error-firmantes');
+    if (!campos.length) { error.textContent = 'No hay firmantes pendientes. Las pecosas seleccionadas ya tienen firma registrada.'; error.classList.remove('d-none'); return; }
     const faltante = datos.find((dato) => !dato.firmante);
     if (faltante) { error.textContent = 'Completa todos los firmantes antes de confirmar.'; error.classList.remove('d-none'); return; }
     const boton = formulario.querySelector('button[type="submit"]');

@@ -1,7 +1,8 @@
 import os
 import tempfile
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
@@ -101,6 +102,7 @@ def _calcular_control(
             "cantidad_esperada": cantidad_esperada,
             "cantidad_ingresada": cantidad_ingresada,
             "estado": estado,
+            "pecosa_id": pecosa.id if pecosa else None,
             "firmante": pecosa.firmante if pecosa else None,
             "fecha_firma": pecosa.fecha_firma if pecosa else None,
             "expediente_alta": pecosa.expediente.numero if pecosa and pecosa.expediente else None,
@@ -185,6 +187,96 @@ def ver_control(
             "total_paginas": total_paginas,
         },
     )
+
+
+@router.get("/control/expedientes-firma-buscar")
+def buscar_expedientes_firma(
+    q: str = "",
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Sugiere expedientes ya usados, sin mantener un maestro separado."""
+    termino = q.strip()
+    consulta = db.query(Pecosa.expediente_firma).filter(
+        Pecosa.expediente_firma.isnot(None), Pecosa.expediente_firma != ""
+    )
+    if termino:
+        consulta = consulta.filter(Pecosa.expediente_firma.ilike(f"%{termino}%"))
+    valores = []
+    vistos = set()
+    for (valor,) in consulta.order_by(Pecosa.creado_en.desc()).limit(100).all():
+        valor = str(valor).strip()
+        if valor and valor not in vistos:
+            vistos.add(valor)
+            valores.append(valor)
+        if len(valores) == 20:
+            break
+    from fastapi.responses import JSONResponse
+    return JSONResponse(valores)
+
+
+@router.post("/control/asignar-expediente-firma")
+def asignar_expediente_firma(
+    claves: list[str] = Form(...),
+    expediente_firma: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Asigna solo el expediente a varias pecosas; la firma queda individual."""
+    expediente_firma = expediente_firma.strip()
+    seleccionadas = {_clave_control(valor) for valor in claves}
+    seleccionadas.discard(None)
+    if not expediente_firma or not seleccionadas:
+        return RedirectResponse(
+            url="/control?error=Selecciona+pecosas+y+escribe+el+expediente+de+firma",
+            status_code=303,
+        )
+
+    numeros = {numero for _, numero in seleccionadas}
+    pecosas = {
+        pecosa.numero: pecosa
+        for pecosa in db.query(Pecosa).filter(Pecosa.numero.in_(numeros)).all()
+    }
+    actualizadas = 0
+    for _, numero in seleccionadas:
+        pecosa = pecosas.get(numero)
+        if pecosa is None or pecosa.estado == "Firmada":
+            continue
+        pecosa.expediente_firma = expediente_firma
+        actualizadas += 1
+    if not actualizadas:
+        return RedirectResponse(
+            url="/control?error=Las+pecosas+seleccionadas+no+pueden+recibir+el+expediente",
+            status_code=303,
+        )
+    db.commit()
+    mensaje = quote(f"Se asignó el expediente de firma a {actualizadas} pecosa(s).")
+    return RedirectResponse(url=f"/control?info={mensaje}", status_code=303)
+
+
+@router.post("/control/firmar")
+def registrar_firma_control(
+    pecosa_id: int = Form(...),
+    firmante: str = Form(...),
+    expediente_firma: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Completa el firmante de una pecosa, después de la asignación masiva."""
+    pecosa = db.query(Pecosa).get(pecosa_id)
+    firmante = firmante.strip()
+    expediente_firma = expediente_firma.strip()
+    if pecosa is None or not firmante or not expediente_firma:
+        return RedirectResponse(
+            url="/control?error=Escribe+el+firmante+y+el+expediente+de+firma",
+            status_code=303,
+        )
+    pecosa.firmante = firmante
+    pecosa.expediente_firma = expediente_firma
+    pecosa.fecha_firma = date.today()
+    pecosa.estado = "Firmada"
+    db.commit()
+    return RedirectResponse(url="/control?info=Firma+registrada", status_code=303)
 
 
 @router.post("/control/importar")

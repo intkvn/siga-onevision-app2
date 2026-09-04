@@ -80,6 +80,9 @@
 <a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte completo (Excel)</a>
 <button type="button" class="btn btn-outline-warning mb-3" onclick="abrirObservacionSeleccionadas()">Observar pecosas seleccionadas</button>
 <button type="button" class="btn btn-outline-secondary mb-3" onclick="restituirObservacionesSeleccionadas()">Restituir observadas seleccionadas</button>
+<button type="button" class="btn btn-outline-primary mb-3" onclick="abrirAsignarExpedienteFirma()">Asignar expediente de firma</button>
+<button type="button" class="btn btn-link mb-3" onclick="limpiarSeleccionFirma()">Limpiar selección de firmas</button>
+<span id="contador-seleccion-firma" class="text-muted small"></span>
 <p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (incluye la causal y el sustento de las observadas) y "Bienes con QR".</p>
 <p class="text-muted small">Mostrando {{ filas|length }} de {{ total_filtradas }} pecosa(s) que coinciden con los filtros.</p>
 
@@ -101,6 +104,8 @@
                 <input class="form-check-input seleccion-observacion" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa {{ f.nro_pecosa }}">
                 {% elif f.estado == "Observada" %}
                 <input class="form-check-input seleccion-restitucion" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa observada {{ f.nro_pecosa }}">
+                {% elif f.pecosa_id and f.estado == "Ingresado a SIGA y OVC (falta firma)" %}
+                <input class="form-check-input seleccion-firma" type="checkbox" value="{{ f.ano_eje }}|{{ f.nro_pecosa }}" aria-label="Seleccionar pecosa {{ f.nro_pecosa }} para expediente de firma">
                 {% endif %}
             </td>
             <td>{{ f.nro_pecosa }}</td>
@@ -128,6 +133,14 @@
             <td>{{ f.expediente_alta or "-" }}</td>
             <td>{{ f.expediente_firma or "-" }}</td>
             <td>
+                {% if f.pecosa_id and f.estado == "Ingresado a SIGA y OVC (falta firma)" %}
+                <form method="post" action="/control/firmar" class="d-flex gap-1 align-items-center mb-1">
+                    <input type="hidden" name="pecosa_id" value="{{ f.pecosa_id }}">
+                    <input type="text" name="firmante" class="form-control form-control-sm" list="lista-firmantes-control" placeholder="Firmante" required>
+                    <input type="text" name="expediente_firma" class="form-control form-control-sm" list="lista-expedientes-firma" value="{{ f.expediente_firma or '' }}" placeholder="Exp. firma" required>
+                    <button class="btn btn-sm btn-outline-success">Firmar</button>
+                </form>
+                {% endif %}
                 {% if f.estado == "Pendiente envío almacén" %}
                 <button type="button" class="btn btn-sm btn-outline-warning" onclick="abrirObservacionIndividual('{{ f.ano_eje }}', '{{ f.nro_pecosa }}')">Observar</button>
                 {% elif f.estado == "Observada" %}
@@ -184,7 +197,90 @@
 
 <form id="form-restitucion-masiva" method="post" action="/control/restituir-observaciones" class="d-none"></form>
 
+<dialog id="dialog-expediente-firma" style="max-width: 620px; border: 0; border-radius: 8px; box-shadow: 0 0 24px #666;">
+    <form method="post" action="/control/asignar-expediente-firma" id="form-expediente-firma">
+        <h5>Asignar expediente de firma</h5>
+        <p id="resumen-seleccion-firma" class="text-muted"></p>
+        <div id="claves-expediente-firma"></div>
+        <div class="mb-3">
+            <label class="form-label" for="expediente-firma-masivo">Número de expediente firma</label>
+            <input type="text" id="expediente-firma-masivo" name="expediente_firma" class="form-control" list="lista-expedientes-firma" required>
+        </div>
+        <p class="text-muted small">Solo se asignará el expediente. El firmante se registrará después en cada pecosa.</p>
+        <button type="submit" class="btn btn-primary">Asignar expediente</button>
+        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('dialog-expediente-firma').close()">Cancelar</button>
+    </form>
+</dialog>
+<datalist id="lista-firmantes-control"></datalist>
+<datalist id="lista-expedientes-firma"></datalist>
+
 <script>
+const almacenamientoSeleccionesFirma = 'control-selecciones-firma';
+function leerSeleccionesFirma() {
+    try { return new Set(JSON.parse(localStorage.getItem(almacenamientoSeleccionesFirma) || '[]')); }
+    catch (_) { return new Set(); }
+}
+function guardarSeleccionesFirma(selecciones) {
+    localStorage.setItem(almacenamientoSeleccionesFirma, JSON.stringify(Array.from(selecciones)));
+    actualizarContadorFirma(selecciones);
+}
+function actualizarContadorFirma(selecciones = leerSeleccionesFirma()) {
+    const contador = document.getElementById('contador-seleccion-firma');
+    if (contador) contador.textContent = selecciones.size ? `${selecciones.size} pecosa(s) seleccionada(s) para firma` : '';
+}
+function prepararSeleccionesFirma() {
+    const selecciones = leerSeleccionesFirma();
+    document.querySelectorAll('.seleccion-firma').forEach((campo) => {
+        campo.checked = selecciones.has(campo.value);
+        campo.addEventListener('change', () => {
+            const actuales = leerSeleccionesFirma();
+            if (campo.checked) actuales.add(campo.value); else actuales.delete(campo.value);
+            guardarSeleccionesFirma(actuales);
+        });
+    });
+    actualizarContadorFirma(selecciones);
+}
+function limpiarSeleccionFirma() {
+    localStorage.removeItem(almacenamientoSeleccionesFirma);
+    document.querySelectorAll('.seleccion-firma').forEach((campo) => campo.checked = false);
+    actualizarContadorFirma(new Set());
+}
+function abrirAsignarExpedienteFirma() {
+    const claves = Array.from(leerSeleccionesFirma());
+    if (!claves.length) { alert('Selecciona al menos una pecosa con estado pendiente de firma.'); return; }
+    const contenedor = document.getElementById('claves-expediente-firma');
+    contenedor.replaceChildren();
+    claves.forEach((clave) => {
+        const campo = document.createElement('input');
+        campo.type = 'hidden'; campo.name = 'claves'; campo.value = clave;
+        contenedor.appendChild(campo);
+    });
+    document.getElementById('resumen-seleccion-firma').textContent = `Pecosa(s) seleccionada(s): ${claves.map((clave) => clave.split('|')[1]).join(', ')}`;
+    document.getElementById('dialog-expediente-firma').showModal();
+}
+document.getElementById('form-expediente-firma').addEventListener('submit', () => localStorage.removeItem(almacenamientoSeleccionesFirma));
+prepararSeleccionesFirma();
+
+async function cargarSugerencias(url, lista, termino = '') {
+    try {
+        const respuesta = await fetch(url + encodeURIComponent(termino));
+        if (!respuesta.ok) return;
+        const valores = await respuesta.json();
+        lista.replaceChildren(...valores.map((valor) => {
+            const opcion = document.createElement('option'); opcion.value = valor; return opcion;
+        }));
+    } catch (_) { /* La escritura manual sigue disponible si no hay conexión. */ }
+}
+const listaFirmantes = document.getElementById('lista-firmantes-control');
+document.querySelectorAll('input[name="firmante"]').forEach((campo) => campo.addEventListener('input', () => {
+    if (campo.value.trim().length >= 2) cargarSugerencias('/pecosas/personas-buscar?q=', listaFirmantes, campo.value.trim());
+}));
+const listaExpedientes = document.getElementById('lista-expedientes-firma');
+document.querySelectorAll('input[name="expediente_firma"]').forEach((campo) => {
+    campo.addEventListener('focus', () => cargarSugerencias('/control/expedientes-firma-buscar?q=', listaExpedientes, campo.value.trim()));
+    campo.addEventListener('input', () => cargarSugerencias('/control/expedientes-firma-buscar?q=', listaExpedientes, campo.value.trim()));
+});
+
 function abrirDialogoConClaves(claves) {
     if (!claves.length) {
         alert('Selecciona al menos una pecosa pendiente.');

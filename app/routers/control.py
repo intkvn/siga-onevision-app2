@@ -166,6 +166,18 @@ def ver_control(
     pagina = max(1, min(pagina, total_paginas))
     inicio = (pagina - 1) * FILAS_POR_PAGINA
     filas_pagina = filas_filtradas[inicio:inicio + FILAS_POR_PAGINA]
+    indice_firma = [
+        {
+            "clave": f"{fila['ano_eje']}|{fila['nro_pecosa']}",
+            "numero": fila["nro_pecosa"],
+            "ano": fila["ano_eje"],
+            "estado": fila["estado"],
+            "seleccionable": bool(
+                fila["pecosa_id"] and fila["estado"] == ESTADO_FALTA_FIRMA
+            ),
+        }
+        for fila in filas
+    ]
 
     return templates.TemplateResponse(
         "control.html",
@@ -186,6 +198,7 @@ def ver_control(
             "total_filtradas": total_filtradas,
             "pagina": pagina,
             "total_paginas": total_paginas,
+            "indice_firma": indice_firma,
         },
     )
 

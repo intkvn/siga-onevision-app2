@@ -77,6 +77,25 @@
     {% endfor %}
 </div>
 
+<div class="card mb-3">
+    <div class="card-body">
+        <h6 class="mb-2">Selección rápida de pecosas para firma</h6>
+        <p class="text-muted small mb-2">Pega los números del oficio, uno por línea o separados por coma. El sistema marcará las pecosas disponibles aunque estén en otra página.</p>
+        <div class="row g-2 align-items-start">
+            <div class="col-md-7">
+                <textarea id="lista-pecosas-firma" class="form-control form-control-sm" rows="3" placeholder="1200&#10;1212&#10;1227"></textarea>
+            </div>
+            <div class="col-md-2">
+                <input id="anio-lista-pecosas" type="text" class="form-control form-control-sm" placeholder="Año (opcional)">
+            </div>
+            <div class="col-md-3">
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="seleccionarListaPecosas()">Seleccionar lista</button>
+            </div>
+        </div>
+        <div id="resultado-lista-pecosas" class="small mt-2"></div>
+    </div>
+</div>
+
 <a href="/control/exportar" class="btn btn-success mb-3">Descargar reporte completo (Excel)</a>
 <button type="button" class="btn btn-outline-warning mb-3" onclick="abrirObservacionSeleccionadas()">Observar pecosas seleccionadas</button>
 <button type="button" class="btn btn-outline-secondary mb-3" onclick="restituirObservacionesSeleccionadas()">Restituir observadas seleccionadas</button>
@@ -224,6 +243,7 @@
 
 <script>
 const almacenamientoSeleccionesFirma = 'control-selecciones-firma';
+const indicePecosasFirma = {{ indice_firma|tojson }};
 function leerSeleccionesFirma() {
     try { return new Set(JSON.parse(localStorage.getItem(almacenamientoSeleccionesFirma) || '[]')); }
     catch (_) { return new Set(); }
@@ -252,6 +272,43 @@ function limpiarSeleccionFirma() {
     localStorage.removeItem(almacenamientoSeleccionesFirma);
     document.querySelectorAll('.seleccion-firma').forEach((campo) => campo.checked = false);
     actualizarContadorFirma(new Set());
+}
+function numeroCanonico(valor) {
+    const texto = String(valor || '').trim().replace(/\.0$/, '');
+    return /^\d+$/.test(texto) ? String(Number(texto)) : texto;
+}
+function seleccionarListaPecosas() {
+    const texto = document.getElementById('lista-pecosas-firma').value.trim();
+    const anioGeneral = document.getElementById('anio-lista-pecosas').value.trim();
+    const resultado = document.getElementById('resultado-lista-pecosas');
+    if (!texto) { resultado.textContent = 'Pega al menos un número de pecosa.'; resultado.className = 'small mt-2 text-danger'; return; }
+    const tokens = texto.split(/[\s,;]+/).map((token) => token.trim()).filter(Boolean);
+    const actuales = leerSeleccionesFirma();
+    const seleccionadas = [], noEncontradas = [], ambiguas = [], noDisponibles = [];
+    const vistos = new Set();
+    tokens.forEach((token) => {
+        let anio = anioGeneral;
+        let numero = token;
+        if (token.includes('|')) [anio, numero] = token.split('|', 2).map((parte) => parte.trim());
+        numero = numeroCanonico(numero);
+        if (!numero || vistos.has(`${anio}|${numero}`)) return;
+        vistos.add(`${anio}|${numero}`);
+        const coincidencias = indicePecosasFirma.filter((fila) => numeroCanonico(fila.numero) === numero && (!anio || fila.ano === anio));
+        if (!coincidencias.length) { noEncontradas.push(numero); return; }
+        if (coincidencias.length > 1 && !anio) { ambiguas.push(`${numero} (${coincidencias.map((fila) => fila.ano).join(', ')})`); return; }
+        const fila = coincidencias[0];
+        if (!fila.seleccionable) { noDisponibles.push(`${numero} (${fila.estado})`); return; }
+        actuales.add(fila.clave); seleccionadas.push(`${numero} (${fila.ano})`);
+    });
+    guardarSeleccionesFirma(actuales);
+    document.querySelectorAll('.seleccion-firma').forEach((campo) => campo.checked = actuales.has(campo.value));
+    const partes = [];
+    if (seleccionadas.length) partes.push(`Seleccionadas: ${seleccionadas.join(', ')}`);
+    if (noEncontradas.length) partes.push(`No encontradas: ${noEncontradas.join(', ')}`);
+    if (ambiguas.length) partes.push(`Indica el año para: ${ambiguas.join(', ')}`);
+    if (noDisponibles.length) partes.push(`No disponibles: ${noDisponibles.join(', ')}`);
+    resultado.textContent = partes.join(' | ') || 'No se seleccionó ninguna pecosa.';
+    resultado.className = `small mt-2 ${seleccionadas.length ? 'text-success' : 'text-danger'}`;
 }
 function abrirAsignarExpedienteFirma() {
     const claves = Array.from(leerSeleccionesFirma());

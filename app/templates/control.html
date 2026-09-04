@@ -274,7 +274,12 @@ async function cargarSugerencias(url, lista, termino = '') {
         if (!respuesta.ok) return;
         const valores = await respuesta.json();
         lista.replaceChildren(...valores.map((valor) => {
-            const opcion = document.createElement('option'); opcion.value = valor; return opcion;
+            const texto = typeof valor === 'string'
+                ? valor
+                : `${valor.nombre || ''}${valor.dni ? ' (' + valor.dni + ')' : ''}`;
+            const opcion = document.createElement('option');
+            opcion.value = texto;
+            return opcion;
         }));
     } catch (_) { /* La escritura manual sigue disponible si no hay conexión. */ }
 }

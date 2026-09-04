@@ -72,15 +72,7 @@
             <td>{{ p.firmante or "-" }}</td>
             <td>{{ p.fecha_firma or "-" }}</td>
             <td>{{ p.expediente_firma or "-" }}</td>
-            <td>
-                {% if p.estado != "Firmada" %}
-                <form method="post" action="/pecosas/{{ p.id }}/firmar" class="d-flex gap-1">
-                    <input type="text" name="firmante" class="form-control form-control-sm" list="lista-personas" placeholder="Quién firmó (busca por nombre)" required>
-                    <input type="text" name="expediente_firma" class="form-control form-control-sm" placeholder="N° expediente firma" required>
-                    <button class="btn btn-sm btn-outline-success">Marcar firmada</button>
-                </form>
-                {% endif %}
-            </td>
+            <td class="text-muted small">Gestiona la firma desde Control General</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -101,30 +93,4 @@
 </nav>
 {% endif %}
 
-<datalist id="lista-personas"></datalist>
-<script>
-(() => {
-    const inputs = document.querySelectorAll('input[name="firmante"]');
-    const lista = document.getElementById('lista-personas');
-    let timer;
-    inputs.forEach((input) => input.addEventListener('input', () => {
-        clearTimeout(timer);
-        const termino = input.value.trim();
-        if (termino.length < 2) {
-            lista.replaceChildren();
-            return;
-        }
-        timer = setTimeout(async () => {
-            const respuesta = await fetch('/pecosas/personas-buscar?q=' + encodeURIComponent(termino));
-            if (!respuesta.ok) return;
-            const personas = await respuesta.json();
-            lista.replaceChildren(...personas.map((persona) => {
-                const opcion = document.createElement('option');
-                opcion.value = persona.nombre + ' (' + persona.dni + ')';
-                return opcion;
-            }));
-        }, 250);
-    }));
-})();
-</script>
 {% endblock %}

@@ -1,11 +1,12 @@
 import os
 import tempfile
+import json
 from collections import defaultdict
 from datetime import date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, joinedload
 from openpyxl import Workbook
@@ -224,12 +225,17 @@ def asignar_expediente_firma(
 ):
     """Asigna solo el expediente a varias pecosas; la firma queda individual."""
     expediente_firma = expediente_firma.strip()
-    seleccionadas = {_clave_control(valor) for valor in claves}
-    seleccionadas.discard(None)
+    seleccionadas = []
+    vistas = set()
+    for valor in claves:
+        clave = _clave_control(valor)
+        if clave and clave not in vistas:
+            vistas.add(clave)
+            seleccionadas.append(clave)
     if not expediente_firma or not seleccionadas:
-        return RedirectResponse(
-            url="/control?error=Selecciona+pecosas+y+escribe+el+expediente+de+firma",
-            status_code=303,
+        return JSONResponse(
+            {"ok": False, "error": "Selecciona pecosas y escribe el expediente de firma."},
+            status_code=400,
         )
 
     numeros = {numero for _, numero in seleccionadas}
@@ -237,21 +243,66 @@ def asignar_expediente_firma(
         pecosa.numero: pecosa
         for pecosa in db.query(Pecosa).filter(Pecosa.numero.in_(numeros)).all()
     }
-    actualizadas = 0
-    for _, numero in seleccionadas:
+    actualizadas = []
+    for anio, numero in seleccionadas:
         pecosa = pecosas.get(numero)
         if pecosa is None or pecosa.estado == "Firmada":
             continue
         pecosa.expediente_firma = expediente_firma
-        actualizadas += 1
+        actualizadas.append({
+            "id": pecosa.id,
+            "numero": pecosa.numero,
+            "anio": anio,
+            "expediente_firma": expediente_firma,
+        })
     if not actualizadas:
-        return RedirectResponse(
-            url="/control?error=Las+pecosas+seleccionadas+no+pueden+recibir+el+expediente",
-            status_code=303,
+        return JSONResponse(
+            {"ok": False, "error": "Las pecosas seleccionadas no pueden recibir el expediente."},
+            status_code=400,
         )
     db.commit()
-    mensaje = quote(f"Se asignó el expediente de firma a {actualizadas} pecosa(s).")
-    return RedirectResponse(url=f"/control?info={mensaje}", status_code=303)
+    return JSONResponse({"ok": True, "pecosas": actualizadas})
+
+
+@router.post("/control/confirmar-firmantes")
+def confirmar_firmantes(
+    firmas: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Guarda los firmantes del grupo en una sola transacción."""
+    try:
+        datos = json.loads(firmas)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "No se pudo leer la lista de firmantes."}, status_code=400)
+    if not isinstance(datos, list) or not datos:
+        return JSONResponse({"ok": False, "error": "No hay firmantes para confirmar."}, status_code=400)
+
+    ids = []
+    firmantes_por_id = {}
+    for dato in datos:
+        try:
+            pecosa_id = int(dato["id"])
+            firmante = str(dato["firmante"]).strip()
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "La lista de firmantes no es válida."}, status_code=400)
+        if not firmante:
+            return JSONResponse({"ok": False, "error": "Completa todos los firmantes antes de confirmar."}, status_code=400)
+        if pecosa_id in firmantes_por_id:
+            return JSONResponse({"ok": False, "error": "Hay una pecosa repetida en la lista."}, status_code=400)
+        ids.append(pecosa_id)
+        firmantes_por_id[pecosa_id] = firmante
+
+    pecosas = {pecosa.id: pecosa for pecosa in db.query(Pecosa).filter(Pecosa.id.in_(ids)).all()}
+    if len(pecosas) != len(ids):
+        return JSONResponse({"ok": False, "error": "Una o más pecosas ya no existen."}, status_code=400)
+    for pecosa_id in ids:
+        pecosa = pecosas[pecosa_id]
+        pecosa.firmante = firmantes_por_id[pecosa_id]
+        pecosa.fecha_firma = date.today()
+        pecosa.estado = "Firmada"
+    db.commit()
+    return JSONResponse({"ok": True, "cantidad": len(ids)})
 
 
 @router.post("/control/firmar")

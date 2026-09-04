@@ -133,14 +133,6 @@
             <td>{{ f.expediente_alta or "-" }}</td>
             <td>{{ f.expediente_firma or "-" }}</td>
             <td>
-                {% if f.pecosa_id and f.estado == "Ingresado a SIGA y OVC (falta firma)" %}
-                <form method="post" action="/control/firmar" class="d-flex gap-1 align-items-center mb-1">
-                    <input type="hidden" name="pecosa_id" value="{{ f.pecosa_id }}">
-                    <input type="text" name="firmante" class="form-control form-control-sm" list="lista-firmantes-control" placeholder="Firmante" required>
-                    <input type="text" name="expediente_firma" class="form-control form-control-sm" list="lista-expedientes-firma" value="{{ f.expediente_firma or '' }}" placeholder="Exp. firma" required>
-                    <button class="btn btn-sm btn-outline-success">Firmar</button>
-                </form>
-                {% endif %}
                 {% if f.estado == "Pendiente envío almacén" %}
                 <button type="button" class="btn btn-sm btn-outline-warning" onclick="abrirObservacionIndividual('{{ f.ano_eje }}', '{{ f.nro_pecosa }}')">Observar</button>
                 {% elif f.estado == "Observada" %}
@@ -207,12 +199,28 @@
             <input type="text" id="expediente-firma-masivo" name="expediente_firma" class="form-control" list="lista-expedientes-firma" required>
         </div>
         <p class="text-muted small">Solo se asignará el expediente. El firmante se registrará después en cada pecosa.</p>
-        <button type="submit" class="btn btn-primary">Asignar expediente</button>
+        <button type="submit" class="btn btn-primary">Continuar con firmantes</button>
         <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('dialog-expediente-firma').close()">Cancelar</button>
     </form>
 </dialog>
-<datalist id="lista-firmantes-control"></datalist>
 <datalist id="lista-expedientes-firma"></datalist>
+
+<dialog id="dialog-firmantes" style="max-width: 900px; width: min(95vw, 900px); border: 0; border-radius: 8px; box-shadow: 0 0 24px #666;">
+    <form method="post" action="/control/confirmar-firmantes" id="form-firmantes">
+        <h5>Asignar firmantes</h5>
+        <p class="text-muted">Selecciona un firmante para cada pecosa. La búsqueda se realiza por nombre o DNI.</p>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle" style="min-width: 720px;">
+                <thead><tr><th>Pecosa</th><th>Año</th><th>Expediente firma</th><th style="min-width: 300px;">Firmante</th></tr></thead>
+                <tbody id="filas-firmantes"></tbody>
+            </table>
+        </div>
+        <p id="error-firmantes" class="alert alert-danger d-none"></p>
+        <button type="submit" class="btn btn-success">Confirmar firmantes</button>
+        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('dialog-firmantes').close()">Cancelar</button>
+    </form>
+</dialog>
+<datalist id="lista-firmantes-control"></datalist>
 
 <script>
 const almacenamientoSeleccionesFirma = 'control-selecciones-firma';
@@ -258,7 +266,6 @@ function abrirAsignarExpedienteFirma() {
     document.getElementById('resumen-seleccion-firma').textContent = `Pecosa(s) seleccionada(s): ${claves.map((clave) => clave.split('|')[1]).join(', ')}`;
     document.getElementById('dialog-expediente-firma').showModal();
 }
-document.getElementById('form-expediente-firma').addEventListener('submit', () => localStorage.removeItem(almacenamientoSeleccionesFirma));
 prepararSeleccionesFirma();
 
 async function cargarSugerencias(url, lista, termino = '') {
@@ -272,10 +279,80 @@ async function cargarSugerencias(url, lista, termino = '') {
     } catch (_) { /* La escritura manual sigue disponible si no hay conexión. */ }
 }
 const listaFirmantes = document.getElementById('lista-firmantes-control');
-document.querySelectorAll('input[name="firmante"]').forEach((campo) => campo.addEventListener('input', () => {
-    if (campo.value.trim().length >= 2) cargarSugerencias('/pecosas/personas-buscar?q=', listaFirmantes, campo.value.trim());
-}));
 const listaExpedientes = document.getElementById('lista-expedientes-firma');
+let firmantesPendientes = [];
+
+document.getElementById('form-expediente-firma').addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    const formulario = evento.currentTarget;
+    const boton = formulario.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    try {
+        const respuesta = await fetch(formulario.action, {method: 'POST', body: new FormData(formulario), headers: {'Accept': 'application/json'}});
+        const datos = await respuesta.json();
+        if (!respuesta.ok || !datos.ok) {
+            alert(datos.error || 'No se pudo asignar el expediente.');
+            return;
+        }
+        firmantesPendientes = datos.pecosas;
+        formulario.closest('dialog').close();
+        mostrarVentanaFirmantes(firmantesPendientes);
+    } catch (_) {
+        alert('No se pudo conectar con el servidor.');
+    } finally { boton.disabled = false; }
+});
+
+function mostrarVentanaFirmantes(pecosas) {
+    const cuerpo = document.getElementById('filas-firmantes');
+    const error = document.getElementById('error-firmantes');
+    error.classList.add('d-none');
+    cuerpo.replaceChildren();
+    pecosas.forEach((pecosa) => {
+        const fila = document.createElement('tr');
+        [pecosa.numero, pecosa.anio, pecosa.expediente_firma].forEach((valor) => {
+            const celda = document.createElement('td');
+            celda.textContent = valor || '';
+            fila.appendChild(celda);
+        });
+        const celdaFirmante = document.createElement('td');
+        const campoFirmante = document.createElement('input');
+        campoFirmante.type = 'text';
+        campoFirmante.className = 'form-control form-control-sm firmante-modal';
+        campoFirmante.dataset.id = pecosa.id;
+        campoFirmante.setAttribute('list', 'lista-firmantes-control');
+        campoFirmante.placeholder = 'Nombre o DNI';
+        campoFirmante.required = true;
+        celdaFirmante.appendChild(campoFirmante);
+        fila.appendChild(celdaFirmante);
+        cuerpo.appendChild(fila);
+        campoFirmante.addEventListener('input', () => {
+            if (campoFirmante.value.trim().length >= 2) cargarSugerencias('/pecosas/personas-buscar?q=', listaFirmantes, campoFirmante.value.trim());
+        });
+    });
+    document.getElementById('dialog-firmantes').showModal();
+}
+
+document.getElementById('form-firmantes').addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    const formulario = evento.currentTarget;
+    const campos = Array.from(document.querySelectorAll('.firmante-modal'));
+    const datos = campos.map((campo) => ({id: Number(campo.dataset.id), firmante: campo.value.trim()}));
+    const error = document.getElementById('error-firmantes');
+    const faltante = datos.find((dato) => !dato.firmante);
+    if (faltante) { error.textContent = 'Completa todos los firmantes antes de confirmar.'; error.classList.remove('d-none'); return; }
+    const boton = formulario.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    const formData = new FormData(); formData.append('firmas', JSON.stringify(datos));
+    try {
+        const respuesta = await fetch(formulario.action, {method: 'POST', body: formData, headers: {'Accept': 'application/json'}});
+        const resultado = await respuesta.json();
+        if (!respuesta.ok || !resultado.ok) { error.textContent = resultado.error || 'No se pudieron guardar los firmantes.'; error.classList.remove('d-none'); return; }
+        localStorage.removeItem(almacenamientoSeleccionesFirma);
+        window.location.href = '/control?info=' + encodeURIComponent(`Se confirmaron ${resultado.cantidad} firmante(s).`);
+    } catch (_) { error.textContent = 'No se pudo conectar con el servidor.'; error.classList.remove('d-none'); }
+    finally { boton.disabled = false; }
+});
+
 document.querySelectorAll('input[name="expediente_firma"]').forEach((campo) => {
     campo.addEventListener('focus', () => cargarSugerencias('/control/expedientes-firma-buscar?q=', listaExpedientes, campo.value.trim()));
     campo.addEventListener('input', () => cargarSugerencias('/control/expedientes-firma-buscar?q=', listaExpedientes, campo.value.trim()));

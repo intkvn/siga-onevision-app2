@@ -6,10 +6,10 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import LoteCarga, BienAlta
+from app.models import LoteCarga, BienAlta, Pecosa
 from app.auth import requiere_login
 from app.services.excel_onevision import leer_reporte_qr_onevision, corregir_codigo_patrimonial
 from app.services.lote_status import expedientes_de_lote, expedientes_de_lotes
@@ -92,7 +92,12 @@ async def procesar_reporte_qr(
     finally:
         os.remove(ruta_temporal)
 
-    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
+    bienes = (
+        db.query(BienAlta)
+        .options(joinedload(BienAlta.pecosa))
+        .filter(BienAlta.lote_id == lote_id)
+        .all()
+    )
     bienes_por_codigo = {corregir_codigo_patrimonial(b.codigo_patrimonial): b for b in bienes}
 
     for _, fila in df_qr.iterrows():
@@ -121,7 +126,12 @@ def resultado_impresion(
 ):
     """Muestra qué bienes del lote sí tienen su código QR (encontrados en el
     reporte de One Visión que subiste) y cuáles todavía no."""
-    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
+    bienes = (
+        db.query(BienAlta)
+        .options(joinedload(BienAlta.pecosa))
+        .filter(BienAlta.lote_id == lote_id)
+        .all()
+    )
     encontrados = [b for b in bienes if b.codigo_qr]
     no_encontrados = [b for b in bienes if not b.codigo_qr]
     return templates.TemplateResponse(
@@ -135,9 +145,15 @@ def resultado_impresion(
 
 @router.get("/impresion/lote/{lote_id}/descargar")
 def descargar_impresion(lote_id: int, db: Session = Depends(get_db), _=Depends(requiere_login)):
-    bienes = db.query(BienAlta).filter(
-        BienAlta.lote_id == lote_id, BienAlta.codigo_qr.isnot(None)
-    ).all()
+    bienes = (
+        db.query(BienAlta)
+        .options(
+            joinedload(BienAlta.pecosa).joinedload(Pecosa.expediente),
+            joinedload(BienAlta.centro_costo),
+        )
+        .filter(BienAlta.lote_id == lote_id, BienAlta.codigo_qr.isnot(None))
+        .all()
+    )
     expedientes = sorted({
         b.pecosa.expediente.numero for b in bienes if b.pecosa and b.pecosa.expediente
     })

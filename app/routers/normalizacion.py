@@ -482,7 +482,16 @@ def _pecosas_no_encontradas(lote, bienes):
 @router.get("/normalizacion/lote/{lote_id}", response_class=HTMLResponse)
 def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
-    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
+    bienes = (
+        db.query(BienAlta)
+        .options(
+            joinedload(BienAlta.pecosa),
+            joinedload(BienAlta.persona),
+            joinedload(BienAlta.centro_costo),
+        )
+        .filter(BienAlta.lote_id == lote_id)
+        .all()
+    )
     personas = db.query(Persona).order_by(Persona.nombre_completo).all()
     centros = db.query(CentroCosto).order_by(CentroCosto.nombre_depend).all()
     pendientes = [b for b in bienes if _cruce_incompleto(b)]

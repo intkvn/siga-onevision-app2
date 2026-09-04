@@ -10,6 +10,7 @@ from app.auth import requiere_login
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+FILAS_POR_PAGINA = 50
 
 
 def _encontrar_columna(df: pd.DataFrame, exactas: list[str], contiene: list[str]) -> str | None:
@@ -36,6 +37,8 @@ def ver_maestros(
     request: Request,
     buscar_persona: str = "",
     buscar_centro: str = "",
+    pagina_personas: int = 1,
+    pagina_centros: int = 1,
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
@@ -48,7 +51,16 @@ def ver_maestros(
         consulta_personas = consulta_personas.filter(
             (Persona.nombre_completo.ilike(termino)) | (Persona.dni.ilike(termino))
         )
-    personas = consulta_personas.order_by(Persona.dni == "", Persona.nombre_completo).all()
+    total_personas = consulta_personas.order_by(None).count()
+    total_paginas_personas = max(1, (total_personas + FILAS_POR_PAGINA - 1) // FILAS_POR_PAGINA)
+    pagina_personas = max(1, min(pagina_personas, total_paginas_personas))
+    personas = (
+        consulta_personas
+        .order_by(Persona.dni == "", Persona.nombre_completo)
+        .offset((pagina_personas - 1) * FILAS_POR_PAGINA)
+        .limit(FILAS_POR_PAGINA)
+        .all()
+    )
 
     consulta_centros = db.query(CentroCosto)
     if buscar_centro:
@@ -56,7 +68,16 @@ def ver_maestros(
         consulta_centros = consulta_centros.filter(
             (CentroCosto.nombre_depend.ilike(termino)) | (CentroCosto.ipress.ilike(termino))
         )
-    centros = consulta_centros.order_by(CentroCosto.ipress == "", CentroCosto.nombre_depend).all()
+    total_centros = consulta_centros.order_by(None).count()
+    total_paginas_centros = max(1, (total_centros + FILAS_POR_PAGINA - 1) // FILAS_POR_PAGINA)
+    pagina_centros = max(1, min(pagina_centros, total_paginas_centros))
+    centros = (
+        consulta_centros
+        .order_by(CentroCosto.ipress == "", CentroCosto.nombre_depend)
+        .offset((pagina_centros - 1) * FILAS_POR_PAGINA)
+        .limit(FILAS_POR_PAGINA)
+        .all()
+    )
 
     return templates.TemplateResponse(
         "maestros.html",
@@ -64,6 +85,10 @@ def ver_maestros(
             "request": request, "personas": personas, "centros": centros,
             "incompletas_p": incompletas_p, "incompletos_c": incompletos_c,
             "buscar_persona": buscar_persona, "buscar_centro": buscar_centro,
+            "total_personas": total_personas, "pagina_personas": pagina_personas,
+            "total_paginas_personas": total_paginas_personas,
+            "total_centros": total_centros, "pagina_centros": pagina_centros,
+            "total_paginas_centros": total_paginas_centros,
         },
     )
 

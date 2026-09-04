@@ -1,8 +1,8 @@
 from datetime import date
 from fastapi import APIRouter, Request, Form, Depends
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc
 
 from sqlalchemy import desc, or_
@@ -15,6 +15,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 ESTADOS_PECOSA = ["Recibida", "Normalizada", "StickerGenerado", "Firmada"]
+FILAS_POR_PAGINA = 50
 
 
 @router.get("/pecosas", response_class=HTMLResponse)
@@ -24,6 +25,7 @@ def listar_pecosas(
     expediente: str = "",
     estado: str = "",
     firmante: str = "",
+    pagina: int = 1,
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
@@ -37,16 +39,53 @@ def listar_pecosas(
     if firmante:
         consulta = consulta.filter(Pecosa.firmante.ilike(f"%{firmante.strip()}%"))
 
-    pecosas = consulta.order_by(desc(Pecosa.creado_en)).all()
-    personas = db.query(Persona).order_by(Persona.nombre_completo).all()
+    total = consulta.order_by(None).count()
+    total_paginas = max(1, (total + FILAS_POR_PAGINA - 1) // FILAS_POR_PAGINA)
+    pagina = max(1, min(pagina, total_paginas))
+    pecosas = (
+        consulta.options(joinedload(Pecosa.expediente))
+        .order_by(desc(Pecosa.creado_en))
+        .offset((pagina - 1) * FILAS_POR_PAGINA)
+        .limit(FILAS_POR_PAGINA)
+        .all()
+    )
     return templates.TemplateResponse(
         "pecosas.html",
         {
-            "request": request, "pecosas": pecosas, "personas": personas,
+            "request": request, "pecosas": pecosas,
             "estados": ESTADOS_PECOSA,
             "filtros": {"numero": numero, "expediente": expediente, "estado": estado, "firmante": firmante},
+            "total": total, "pagina": pagina, "total_paginas": total_paginas,
         },
     )
+
+
+@router.get("/pecosas/personas-buscar")
+def buscar_personas_firmantes(
+    q: str = "",
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    """Devuelve solo coincidencias del maestro para el autocompletado.
+
+    Antes la página enviaba las 5129 personas en cada respuesta. La búsqueda
+    bajo demanda mantiene el mismo campo de firma sin cargar todo el maestro.
+    """
+    termino = q.strip()
+    if not termino:
+        return JSONResponse([])
+    patron = f"%{termino}%"
+    personas = (
+        db.query(Persona.id, Persona.nombre_completo, Persona.dni)
+        .filter((Persona.nombre_completo.ilike(patron)) | (Persona.dni.ilike(patron)))
+        .order_by(Persona.nombre_completo)
+        .limit(20)
+        .all()
+    )
+    return JSONResponse([
+        {"id": persona.id, "nombre": persona.nombre_completo, "dni": persona.dni}
+        for persona in personas
+    ])
 
 
 @router.post("/pecosas/nuevas-multiples")

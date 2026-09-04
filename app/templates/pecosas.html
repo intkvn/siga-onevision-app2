@@ -86,9 +86,45 @@
     </tbody>
 </table>
 
-<datalist id="lista-personas">
-    {% for persona in personas %}
-    <option value="{{ persona.nombre_completo }} ({{ persona.dni }})">
-    {% endfor %}
-</datalist>
+<p class="text-muted small">Mostrando {{ pecosas|length }} de {{ total }} pecosa(s).</p>
+{% if total_paginas > 1 %}
+<nav aria-label="Paginación de pecosas" class="d-flex justify-content-between align-items-center mb-3">
+    <span class="text-muted small">Página {{ pagina }} de {{ total_paginas }}</span>
+    <div class="btn-group">
+        {% if pagina > 1 %}
+        <a class="btn btn-sm btn-outline-primary" href="/pecosas?numero={{ filtros.numero|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&firmante={{ filtros.firmante|urlencode }}&pagina={{ pagina - 1 }}">Anterior</a>
+        {% endif %}
+        {% if pagina < total_paginas %}
+        <a class="btn btn-sm btn-outline-primary" href="/pecosas?numero={{ filtros.numero|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&firmante={{ filtros.firmante|urlencode }}&pagina={{ pagina + 1 }}">Siguiente</a>
+        {% endif %}
+    </div>
+</nav>
+{% endif %}
+
+<datalist id="lista-personas"></datalist>
+<script>
+(() => {
+    const inputs = document.querySelectorAll('input[name="firmante"]');
+    const lista = document.getElementById('lista-personas');
+    let timer;
+    inputs.forEach((input) => input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const termino = input.value.trim();
+        if (termino.length < 2) {
+            lista.replaceChildren();
+            return;
+        }
+        timer = setTimeout(async () => {
+            const respuesta = await fetch('/pecosas/personas-buscar?q=' + encodeURIComponent(termino));
+            if (!respuesta.ok) return;
+            const personas = await respuesta.json();
+            lista.replaceChildren(...personas.map((persona) => {
+                const opcion = document.createElement('option');
+                opcion.value = persona.nombre + ' (' + persona.dni + ')';
+                return opcion;
+            }));
+        }, 250);
+    }));
+})();
+</script>
 {% endblock %}

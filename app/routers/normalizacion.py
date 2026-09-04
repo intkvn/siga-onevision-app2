@@ -1,11 +1,12 @@
 import os
 import tempfile
+from collections import defaultdict
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models import Pecosa, Expediente, BienAlta, LoteCarga, Persona, CentroCosto
@@ -14,7 +15,7 @@ from app.config import ANIO_INVENTARIO, EJECUTORA, ESTADOS
 from app.services.excel_siga import leer_reporte_siga, filtrar_por_pecosas, extraer_numero_pecosa
 from app.services.matching import cruzar_fila
 from app.services.excel_onevision import generar_formato_importacion
-from app.services.lote_status import expedientes_de_lote
+from app.services.lote_status import expedientes_de_lote, expedientes_de_lotes
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -23,7 +24,11 @@ templates = Jinja2Templates(directory="app/templates")
 @router.get("/normalizacion", response_class=HTMLResponse)
 def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     pecosas_pendientes = (
-        db.query(Pecosa).filter(Pecosa.estado == "Recibida").join(Expediente).all()
+        db.query(Pecosa)
+        .options(joinedload(Pecosa.expediente))
+        .filter(Pecosa.estado == "Recibida")
+        .join(Expediente)
+        .all()
     )
     # Agrupamos por expediente, porque un expediente puede traer muchas pecosas
     # y no tiene sentido marcarlas una por una.
@@ -35,9 +40,41 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
         expedientes.setdefault(exp.numero, []).append(p.numero)
 
     lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
-    lotes = [_resumen_lote(db, lote) for lote in lotes_query]
-    bienes_historicos_pendientes = _bienes_historicos_pendientes_siga(db)
-    lotes_historicos_sin_datos = _lotes_historicos_sin_datos_lote(db)
+    lotes_por_id = {lote.id: lote for lote in lotes_query}
+    bienes_por_lote = defaultdict(list)
+    if lotes_por_id:
+        bienes = (
+            db.query(BienAlta)
+            .options(
+                joinedload(BienAlta.pecosa),
+                joinedload(BienAlta.persona),
+                joinedload(BienAlta.centro_costo),
+                joinedload(BienAlta.lote),
+            )
+            .filter(BienAlta.lote_id.in_(lotes_por_id))
+            .all()
+        )
+        for bien in bienes:
+            bienes_por_lote[bien.lote_id].append(bien)
+    else:
+        bienes = []
+
+    expedientes_por_lote = expedientes_de_lotes(db, lotes_query)
+    lotes = [
+        _resumen_lote(
+            db,
+            lote,
+            bienes=bienes_por_lote[lote.id],
+            expedientes=expedientes_por_lote.get(lote.id, []),
+        )
+        for lote in lotes_query
+    ]
+    bienes_historicos_pendientes = _bienes_historicos_pendientes_siga(
+        db, bienes=bienes, lotes_por_id=lotes_por_id
+    )
+    lotes_historicos_sin_datos = _lotes_historicos_sin_datos_lote(
+        db, lotes=lotes_query
+    )
     return templates.TemplateResponse(
         "normalizacion.html",
         {
@@ -50,10 +87,26 @@ def formulario_normalizacion(request: Request, db: Session = Depends(get_db), _=
     )
 
 
-def _resumen_lote(db: Session, lote: LoteCarga) -> dict:
+def _resumen_lote(
+    db: Session,
+    lote: LoteCarga,
+    bienes: list[BienAlta] | None = None,
+    expedientes: list[str] | None = None,
+) -> dict:
     """Arma el estado de un lote (Vacío / Incompleto / Completo / Generado)
     y sus expedientes, para mostrarlo en la lista sin tener que entrar."""
-    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
+    if bienes is None:
+        bienes = (
+            db.query(BienAlta)
+            .options(
+                joinedload(BienAlta.pecosa),
+                joinedload(BienAlta.persona),
+                joinedload(BienAlta.centro_costo),
+                joinedload(BienAlta.lote),
+            )
+            .filter(BienAlta.lote_id == lote.id)
+            .all()
+        )
     pendientes = [b for b in bienes if _cruce_incompleto(b)]
     no_encontradas = _pecosas_no_encontradas(lote, bienes)
     pendientes_siga = [b for b in bienes if _bien_historico_pendiente_siga(b)]
@@ -72,7 +125,7 @@ def _resumen_lote(db: Session, lote: LoteCarga) -> dict:
     return {
         "lote": lote,
         "estado": estado,
-        "expedientes": expedientes_de_lote(db, lote),
+        "expedientes": expedientes if expedientes is not None else expedientes_de_lote(db, lote),
     }
 
 
@@ -86,11 +139,12 @@ def _es_lote_historico(lote: LoteCarga) -> bool:
     return not str(lote.anio or "").strip() or not str(lote.ejecutora or "").strip()
 
 
-def _bien_historico_pendiente_siga(bien: BienAlta) -> bool:
+def _bien_historico_pendiente_siga(bien: BienAlta, lote: LoteCarga | None = None) -> bool:
     """Indica que un bien migrado no conserva aún sus datos fuente de SIGA."""
+    lote = lote or bien.lote
     return (
-        bien.lote is not None
-        and _es_lote_historico(bien.lote)
+        lote is not None
+        and _es_lote_historico(lote)
         and (
             not str(bien.nombre_depend_siga or "").strip()
             or not str(bien.nombre_completo_siga or "").strip()
@@ -98,16 +152,34 @@ def _bien_historico_pendiente_siga(bien: BienAlta) -> bool:
     )
 
 
-def _bienes_historicos_pendientes_siga(db: Session) -> list[BienAlta]:
-    bienes = db.query(BienAlta).join(LoteCarga).all()
-    return [bien for bien in bienes if _bien_historico_pendiente_siga(bien)]
-
-
-def _lotes_historicos_sin_datos_lote(db: Session) -> list[LoteCarga]:
+def _bienes_historicos_pendientes_siga(
+    db: Session,
+    bienes: list[BienAlta] | None = None,
+    lotes_por_id: dict[int, LoteCarga] | None = None,
+) -> list[BienAlta]:
+    if bienes is None:
+        bienes = (
+            db.query(BienAlta)
+            .options(joinedload(BienAlta.lote))
+            .join(LoteCarga)
+            .all()
+        )
     return [
-        lote for lote in db.query(LoteCarga).all()
-        if _es_lote_historico(lote)
+        bien
+        for bien in bienes
+        if _bien_historico_pendiente_siga(
+            bien,
+            lotes_por_id.get(bien.lote_id) if lotes_por_id is not None else None,
+        )
     ]
+
+
+def _lotes_historicos_sin_datos_lote(
+    db: Session, lotes: list[LoteCarga] | None = None
+) -> list[LoteCarga]:
+    if lotes is None:
+        lotes = db.query(LoteCarga).all()
+    return [lote for lote in lotes if _es_lote_historico(lote)]
 
 
 def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa], df_filtrado):

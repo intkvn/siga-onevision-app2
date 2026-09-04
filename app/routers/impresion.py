@@ -1,5 +1,6 @@
 import os
 import tempfile
+from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
@@ -11,7 +12,7 @@ from app.database import get_db
 from app.models import LoteCarga, BienAlta
 from app.auth import requiere_login
 from app.services.excel_onevision import leer_reporte_qr_onevision, corregir_codigo_patrimonial
-from app.services.lote_status import expedientes_de_lote
+from app.services.lote_status import expedientes_de_lote, expedientes_de_lotes
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -29,12 +30,32 @@ ENCABEZADOS_HOJA1 = [
 @router.get("/impresion", response_class=HTMLResponse)
 def formulario_impresion(request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lotes_query = db.query(LoteCarga).order_by(LoteCarga.id.desc()).all()
-    lotes = [_resumen_impresion_lote(db, lote) for lote in lotes_query]
+    bienes_por_lote = defaultdict(list)
+    lote_ids = [lote.id for lote in lotes_query]
+    if lote_ids:
+        for bien in db.query(BienAlta).filter(BienAlta.lote_id.in_(lote_ids)).all():
+            bienes_por_lote[bien.lote_id].append(bien)
+    expedientes_por_lote = expedientes_de_lotes(db, lotes_query)
+    lotes = [
+        _resumen_impresion_lote(
+            db,
+            lote,
+            bienes=bienes_por_lote[lote.id],
+            expedientes=expedientes_por_lote.get(lote.id, []),
+        )
+        for lote in lotes_query
+    ]
     return templates.TemplateResponse("impresion.html", {"request": request, "lotes": lotes})
 
 
-def _resumen_impresion_lote(db: Session, lote: LoteCarga) -> dict:
-    bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
+def _resumen_impresion_lote(
+    db: Session,
+    lote: LoteCarga,
+    bienes: list[BienAlta] | None = None,
+    expedientes: list[str] | None = None,
+) -> dict:
+    if bienes is None:
+        bienes = db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
     con_qr = [b for b in bienes if b.codigo_qr]
 
     if not bienes:
@@ -49,7 +70,7 @@ def _resumen_impresion_lote(db: Session, lote: LoteCarga) -> dict:
     return {
         "lote": lote,
         "estado": estado,
-        "expedientes": expedientes_de_lote(db, lote),
+        "expedientes": expedientes if expedientes is not None else expedientes_de_lote(db, lote),
         "total": len(bienes),
         "con_qr": len(con_qr),
     }

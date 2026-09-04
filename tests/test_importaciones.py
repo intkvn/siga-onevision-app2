@@ -26,6 +26,7 @@ from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_l
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
 from app.services.excel_verificacion import leer_reporte_verificacion
+from app.services.lote_status import expedientes_de_lotes
 from app.routers.verificacion import (
     ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
 )
@@ -268,6 +269,36 @@ class ObservacionControlPecosaTest(unittest.TestCase):
         fila = _calcular_control(self.db)[0]
         self.assertEqual(fila["estado"], ESTADO_OBSERVADA)
         self.assertEqual(fila["observacion"].sustento, "La RIS maneja su propio SIGA.")
+
+
+class ExpedientesPorLotesTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+        expediente_uno = Expediente(numero="40001")
+        expediente_dos = Expediente(numero="40002")
+        lote_uno = LoteCarga(anio="2026", ejecutora="785", pecosas_solicitadas="101,102")
+        lote_dos = LoteCarga(anio="2026", ejecutora="785", pecosas_solicitadas="102,999")
+        self.db.add_all([expediente_uno, expediente_dos, lote_uno, lote_dos])
+        self.db.flush()
+        self.db.add_all([
+            Pecosa(numero="101", expediente_id=expediente_uno.id),
+            Pecosa(numero="102", expediente_id=expediente_dos.id),
+        ])
+        self.db.commit()
+        self.lote_uno = lote_uno
+        self.lote_dos = lote_dos
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_agrupa_expedientes_para_varios_lotes(self):
+        resultado = expedientes_de_lotes(self.db, [self.lote_uno, self.lote_dos])
+
+        self.assertEqual(resultado[self.lote_uno.id], ["40001", "40002"])
+        self.assertEqual(resultado[self.lote_dos.id], ["40002"])
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

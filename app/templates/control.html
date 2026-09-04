@@ -81,6 +81,7 @@
 <button type="button" class="btn btn-outline-warning mb-3" onclick="abrirObservacionSeleccionadas()">Observar pecosas seleccionadas</button>
 <button type="button" class="btn btn-outline-secondary mb-3" onclick="restituirObservacionesSeleccionadas()">Restituir observadas seleccionadas</button>
 <p class="text-muted small">Trae dos hojas: "Todas las Pecosas" (incluye la causal y el sustento de las observadas) y "Bienes con QR".</p>
+<p class="text-muted small">Mostrando {{ filas|length }} de {{ total_filtradas }} pecosa(s) que coinciden con los filtros.</p>
 
 {% if filas %}
 <div class="table-responsive">
@@ -145,6 +146,20 @@
     </tbody>
 </table>
 </div>
+
+{% if total_paginas > 1 %}
+<nav aria-label="Paginación de control" class="d-flex justify-content-between align-items-center">
+    <span class="text-muted small">Página {{ pagina }} de {{ total_paginas }}</span>
+    <div class="btn-group">
+        {% if pagina > 1 %}
+        <a class="btn btn-sm btn-outline-primary" href="/control?numero={{ filtros.numero|urlencode }}&estado={{ filtros.estado|urlencode }}&lote={{ filtros.lote|urlencode }}&expediente_alta={{ filtros.expediente_alta|urlencode }}&pagina={{ pagina - 1 }}">Anterior</a>
+        {% endif %}
+        {% if pagina < total_paginas %}
+        <a class="btn btn-sm btn-outline-primary" href="/control?numero={{ filtros.numero|urlencode }}&estado={{ filtros.estado|urlencode }}&lote={{ filtros.lote|urlencode }}&expediente_alta={{ filtros.expediente_alta|urlencode }}&pagina={{ pagina + 1 }}">Siguiente</a>
+        {% endif %}
+    </div>
+</nav>
+{% endif %}
 
 <dialog id="dialog-observacion" style="max-width: 620px; border: 0; border-radius: 8px; box-shadow: 0 0 24px #666;">
     <form method="post" action="/control/observar" id="form-observacion">

@@ -17,6 +17,20 @@ from app.models import (  # noqa: F401  (necesario para que create_all las vea)
 # esto es más simple que manejar migraciones)
 Base.metadata.create_all(bind=engine)
 
+# Estos índices permiten agrupar rápidamente bienes por pecosa y lote. Se
+# aplican también a las bases ya existentes, sin modificar registros.
+with engine.begin() as conn:
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_bienes_alta_pecosa_id ON bienes_alta (pecosa_id)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_bienes_alta_lote_id ON bienes_alta (lote_id)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_relacion_pecosas_ano_numero "
+        "ON relacion_pecosa_items (ano_eje, nro_pecosa)"
+    ))
+
 # create_all NO agrega columnas nuevas a tablas que ya existen. En PostgreSQL,
 # las columnas que se sumen después de la primera vez se agregan aquí a mano,
 # de forma segura (no hace nada si la columna ya existe). SQLite omite estas

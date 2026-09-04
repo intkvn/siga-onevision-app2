@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from openpyxl import Workbook
 
 from app.database import get_db
@@ -31,9 +31,12 @@ CAUSALES_OBSERVACION = [
     "Transferencia a otra RIS/unidad ejecutora",
     "Otra",
 ]
+FILAS_POR_PAGINA = 50
 
 
-def _calcular_control(db: Session) -> list[dict]:
+def _calcular_control(
+    db: Session, pecosas_db: dict[str, Pecosa] | None = None
+) -> list[dict]:
     """Arma el control por año y N° de pecosa, en columnas separadas."""
     items = db.query(RelacionPecosaItem).all()
     por_pecosa = defaultdict(list)
@@ -41,7 +44,20 @@ def _calcular_control(db: Session) -> list[dict]:
         clave = (str(it.ano_eje or "").strip(), it.nro_pecosa)
         por_pecosa[clave].append(it)
 
-    pecosas_db = {p.numero: p for p in db.query(Pecosa).all()}
+    if pecosas_db is None:
+        pecosas_db = {
+            pecosa.numero: pecosa
+            for pecosa in db.query(Pecosa)
+            .options(joinedload(Pecosa.expediente))
+            .all()
+        }
+
+    bienes_por_pecosa = defaultdict(lambda: {"cantidad": 0, "lotes": set()})
+    for pecosa_id, lote_id in db.query(BienAlta.pecosa_id, BienAlta.lote_id).all():
+        bienes_por_pecosa[pecosa_id]["cantidad"] += 1
+        if lote_id is not None:
+            bienes_por_pecosa[pecosa_id]["lotes"].add(lote_id)
+
     observaciones = {
         (observacion.ano_eje, observacion.nro_pecosa): observacion
         for observacion in db.query(ObservacionControlPecosa).filter(
@@ -56,9 +72,9 @@ def _calcular_control(db: Session) -> list[dict]:
         cantidad_ingresada = 0
         lotes = []
         if pecosa:
-            bienes_pecosa = db.query(BienAlta).filter(BienAlta.pecosa_id == pecosa.id).all()
-            cantidad_ingresada = len(bienes_pecosa)
-            lotes = sorted({bien.lote_id for bien in bienes_pecosa if bien.lote_id is not None})
+            resumen_bienes = bienes_por_pecosa[pecosa.id]
+            cantidad_ingresada = resumen_bienes["cantidad"]
+            lotes = sorted(resumen_bienes["lotes"])
 
         observacion = observaciones.get((ano_eje, nro_pecosa))
         if observacion:
@@ -110,11 +126,17 @@ def ver_control(
     estado: str = "",
     lote: str = "",
     expediente_alta: str = "",
+    pagina: int = 1,
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
-    filas = _calcular_control(db)
-    pecosas_db = {p.numero: p for p in db.query(Pecosa).all()}
+    pecosas_db = {
+        pecosa.numero: pecosa
+        for pecosa in db.query(Pecosa)
+        .options(joinedload(Pecosa.expediente))
+        .all()
+    }
+    filas = _calcular_control(db, pecosas_db=pecosas_db)
     resumen = defaultdict(int)
     for f in filas:
         resumen[f["estado"]] += 1
@@ -136,11 +158,16 @@ def ver_control(
     expedientes_alta = sorted({
         str(fila["expediente_alta"]) for fila in filas if fila["expediente_alta"]
     })
+    total_filtradas = len(filas_filtradas)
+    total_paginas = max(1, (total_filtradas + FILAS_POR_PAGINA - 1) // FILAS_POR_PAGINA)
+    pagina = max(1, min(pagina, total_paginas))
+    inicio = (pagina - 1) * FILAS_POR_PAGINA
+    filas_pagina = filas_filtradas[inicio:inicio + FILAS_POR_PAGINA]
 
     return templates.TemplateResponse(
         "control.html",
         {
-            "request": request, "filas": filas_filtradas, "hay_datos": bool(filas), "resumen": resumen,
+            "request": request, "filas": filas_pagina, "hay_datos": bool(filas), "resumen": resumen,
             "pecosas_db": pecosas_db,
             "estados": [
                 ESTADO_PENDIENTE_ALMACEN, ESTADO_PARCIAL, ESTADO_EXCESO,
@@ -153,6 +180,9 @@ def ver_control(
                 "numero": numero, "estado": estado, "lote": lote,
                 "expediente_alta": expediente_alta,
             },
+            "total_filtradas": total_filtradas,
+            "pagina": pagina,
+            "total_paginas": total_paginas,
         },
     )
 

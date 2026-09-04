@@ -70,7 +70,7 @@
     </div>
 </div>
 
-<p class="text-muted small">Mostrando {{ filas|length }} de {{ total_bienes }} bien(es) registrados. Las inconsistencias aparecen primero.</p>
+<p class="text-muted small">Mostrando {{ filas|length }} de {{ total_filtradas }} resultado(s). Las inconsistencias aparecen primero.</p>
 <div class="table-responsive">
 <table class="table table-sm table-hover bg-white">
     <thead>
@@ -100,6 +100,20 @@
     </tbody>
 </table>
 </div>
+
+{% if total_paginas > 1 %}
+<nav aria-label="Paginación de verificación" class="d-flex justify-content-between align-items-center">
+    <span class="text-muted small">Página {{ pagina }} de {{ total_paginas }}</span>
+    <div class="btn-group">
+        {% if pagina > 1 %}
+        <a class="btn btn-sm btn-outline-primary" href="/verificacion?codigo={{ filtros.codigo|urlencode }}&pecosa={{ filtros.pecosa|urlencode }}&lote={{ filtros.lote|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&pagina={{ pagina - 1 }}">Anterior</a>
+        {% endif %}
+        {% if pagina < total_paginas %}
+        <a class="btn btn-sm btn-outline-primary" href="/verificacion?codigo={{ filtros.codigo|urlencode }}&pecosa={{ filtros.pecosa|urlencode }}&lote={{ filtros.lote|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&pagina={{ pagina + 1 }}">Siguiente</a>
+        {% endif %}
+    </div>
+</nav>
+{% endif %}
 {% else %}
 <p class="text-muted">Importa el reporte patrimonial completo de SIGA para iniciar la verificación de los {{ total_bienes }} bienes registrados.</p>
 {% endif %}

@@ -107,8 +107,8 @@ class BienAlta(Base):
     __tablename__ = "bienes_alta"
 
     id = Column(Integer, primary_key=True)
-    pecosa_id = Column(Integer, ForeignKey("pecosas.id"), nullable=False)
-    lote_id = Column(Integer, ForeignKey("lotes_carga.id"), nullable=True)
+    pecosa_id = Column(Integer, ForeignKey("pecosas.id"), nullable=False, index=True)
+    lote_id = Column(Integer, ForeignKey("lotes_carga.id"), nullable=True, index=True)
 
     codigo_patrimonial = Column(String(20), nullable=False, index=True)
     descripcion = Column(String(300), nullable=False)

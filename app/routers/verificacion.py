@@ -6,7 +6,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth import requiere_login
 from app.database import get_db
@@ -26,9 +26,15 @@ ESTADOS_VERIFICACION = [
     ESTADO_SIN_VERIFICAR,
     ESTADO_CORRECTA,
 ]
+FILAS_POR_PAGINA = 50
 
 
-def _estados_control_por_anio_pecosa(db: Session, bienes: list[BienAlta]) -> dict:
+def _estados_control_por_anio_pecosa(
+    db: Session,
+    bienes: list[BienAlta],
+    items: list[RelacionPecosaItem] | None = None,
+    pecosas: dict[str, Pecosa] | None = None,
+) -> dict:
     """Calcula el estado de control sin mezclar una pecosa repetida de otro año."""
     bienes_por_clave = defaultdict(list)
     for bien in bienes:
@@ -37,11 +43,14 @@ def _estados_control_por_anio_pecosa(db: Session, bienes: list[BienAlta]) -> dic
             bienes_por_clave[clave].append(bien)
 
     items_por_clave = defaultdict(list)
-    for item in db.query(RelacionPecosaItem).all():
+    if items is None:
+        items = db.query(RelacionPecosaItem).all()
+    for item in items:
         clave = (str(item.ano_eje or "").strip(), item.nro_pecosa)
         items_por_clave[clave].append(item)
 
-    pecosas = {pecosa.numero: pecosa for pecosa in db.query(Pecosa).all()}
+    if pecosas is None:
+        pecosas = {pecosa.numero: pecosa for pecosa in db.query(Pecosa).all()}
     estados = {}
     for clave, items in items_por_clave.items():
         cantidad_esperada = sum(item.cant_aprobada or 0 for item in items)
@@ -62,12 +71,24 @@ def _estados_control_por_anio_pecosa(db: Session, bienes: list[BienAlta]) -> dic
 
 
 def _filas_verificacion(db: Session) -> list[dict]:
-    bienes = db.query(BienAlta).order_by(BienAlta.id.desc()).all()
+    bienes = (
+        db.query(BienAlta)
+        .options(
+            joinedload(BienAlta.lote),
+            joinedload(BienAlta.pecosa).joinedload(Pecosa.expediente),
+        )
+        .order_by(BienAlta.id.desc())
+        .all()
+    )
     reporte_por_codigo = {
         fila.codigo_patrimonial: fila
         for fila in db.query(VerificacionPecosaSiga).all()
     }
-    estados_control = _estados_control_por_anio_pecosa(db, bienes)
+    items = db.query(RelacionPecosaItem).all()
+    pecosas = {pecosa.numero: pecosa for pecosa in db.query(Pecosa).all()}
+    estados_control = _estados_control_por_anio_pecosa(
+        db, bienes, items=items, pecosas=pecosas
+    )
     filas = []
 
     for bien in bienes:
@@ -126,32 +147,52 @@ def ver_verificacion(
     lote: str = "",
     expediente: str = "",
     estado: str = "",
+    pagina: int = 1,
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
-    filas = _filas_verificacion(db)
+    filas_completas = _filas_verificacion(db)
     filtros = {
         "codigo": codigo.strip(), "pecosa": pecosa.strip(), "lote": lote.strip(),
         "expediente": expediente.strip(), "estado": estado,
     }
+    filas_filtradas = filas_completas
     if filtros["codigo"]:
-        filas = [fila for fila in filas if filtros["codigo"] in fila["codigo_patrimonial"]]
+        filas_filtradas = [
+            fila for fila in filas_filtradas
+            if filtros["codigo"] in fila["codigo_patrimonial"]
+        ]
     if filtros["pecosa"]:
-        filas = [
-            fila for fila in filas
+        filas_filtradas = [
+            fila for fila in filas_filtradas
             if filtros["pecosa"] in fila["pecosa_alta"] or filtros["pecosa"] in fila["pecosa_real"]
         ]
     if filtros["lote"]:
-        filas = [fila for fila in filas if filtros["lote"] == str(fila["lote"])]
+        filas_filtradas = [
+            fila for fila in filas_filtradas
+            if filtros["lote"] == str(fila["lote"])
+        ]
     if filtros["expediente"]:
-        filas = [fila for fila in filas if filtros["expediente"] in fila["expediente"]]
+        filas_filtradas = [
+            fila for fila in filas_filtradas
+            if filtros["expediente"] in fila["expediente"]
+        ]
     if filtros["estado"]:
-        filas = [fila for fila in filas if fila["estado"] == filtros["estado"]]
+        filas_filtradas = [
+            fila for fila in filas_filtradas if fila["estado"] == filtros["estado"]
+        ]
 
     resumen = defaultdict(int)
-    for fila in _filas_verificacion(db):
+    for fila in filas_completas:
         resumen[fila["estado"]] += 1
-    lotes = sorted({str(fila["lote"]) for fila in _filas_verificacion(db) if fila["lote"]}, key=int)
+    lotes = sorted({
+        str(fila["lote"]) for fila in filas_completas if fila["lote"]
+    }, key=int)
+    total_filtradas = len(filas_filtradas)
+    total_paginas = max(1, (total_filtradas + FILAS_POR_PAGINA - 1) // FILAS_POR_PAGINA)
+    pagina = max(1, min(pagina, total_paginas))
+    inicio = (pagina - 1) * FILAS_POR_PAGINA
+    filas_pagina = filas_filtradas[inicio:inicio + FILAS_POR_PAGINA]
     ultimo_reporte = db.query(VerificacionPecosaSiga).order_by(
         VerificacionPecosaSiga.importado_en.desc()
     ).first()
@@ -159,14 +200,17 @@ def ver_verificacion(
         "verificacion.html",
         {
             "request": request,
-            "filas": filas,
-            "total_bienes": db.query(BienAlta).count(),
+            "filas": filas_pagina,
+            "total_bienes": len(filas_completas),
             "total_reporte": db.query(VerificacionPecosaSiga).count(),
             "ultimo_reporte": ultimo_reporte,
             "estados": ESTADOS_VERIFICACION,
             "resumen": resumen,
             "lotes": lotes,
             "filtros": filtros,
+            "total_filtradas": total_filtradas,
+            "pagina": pagina,
+            "total_paginas": total_paginas,
         },
     )
 

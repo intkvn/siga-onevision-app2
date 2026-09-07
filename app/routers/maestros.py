@@ -1,8 +1,13 @@
+import os
+import tempfile
+
 import pandas as pd
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from app.database import get_db
 from app.models import Persona, CentroCosto
@@ -90,6 +95,57 @@ def ver_maestros(
             "total_centros": total_centros, "pagina_centros": pagina_centros,
             "total_paginas_centros": total_paginas_centros,
         },
+    )
+
+
+def _guardar_excel_maestro(nombre_archivo: str, encabezados: list[str], filas: list[list[str]]) -> str:
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = "Maestro"
+    hoja.append(encabezados)
+    for celda in hoja[1]:
+        celda.font = Font(bold=True, color="FFFFFF")
+        celda.fill = PatternFill("solid", fgColor="1F4E78")
+        celda.alignment = Alignment(horizontal="center", vertical="center")
+    for fila in filas:
+        hoja.append(fila)
+    for fila in hoja.iter_rows(min_row=2):
+        for celda in fila:
+            celda.alignment = Alignment(vertical="top")
+            celda.number_format = "@"
+    hoja.auto_filter.ref = f"A1:{hoja.cell(row=1, column=len(encabezados)).column_letter}{max(1, hoja.max_row)}"
+    hoja.freeze_panes = "A2"
+    hoja.sheet_view.showGridLines = False
+    for indice, ancho in enumerate((36, 18), start=1):
+        hoja.column_dimensions[hoja.cell(row=1, column=indice).column_letter].width = ancho
+    ruta = os.path.join(tempfile.gettempdir(), nombre_archivo)
+    libro.save(ruta)
+    return ruta
+
+
+@router.get("/maestros/personas/exportar")
+def exportar_personas(db: Session = Depends(get_db), _=Depends(requiere_login)):
+    personas = db.query(Persona).order_by(Persona.nombre_completo).all()
+    filas = [[str(persona.nombre_completo or ""), str(persona.dni or "")] for persona in personas]
+    nombre = "maestro_personas.xlsx"
+    ruta = _guardar_excel_maestro(nombre, ["NOMBRE COMPLETO", "DNI"], filas)
+    return FileResponse(
+        ruta,
+        filename=nombre,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@router.get("/maestros/centros/exportar")
+def exportar_centros(db: Session = Depends(get_db), _=Depends(requiere_login)):
+    centros = db.query(CentroCosto).order_by(CentroCosto.nombre_depend).all()
+    filas = [[str(centro.nombre_depend or ""), str(centro.ipress or "")] for centro in centros]
+    nombre = "maestro_centros_costo.xlsx"
+    ruta = _guardar_excel_maestro(nombre, ["NOMBRE DEPENDENCIA", "IPRESS"], filas)
+    return FileResponse(
+        ruta,
+        filename=nombre,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 

@@ -101,20 +101,40 @@ def registrar_pecosas_multiples(
     número de expediente cada vez."""
     numero_expediente = numero_expediente.strip()
     crudos = numeros_pecosa.replace(",", "\n").splitlines()
-    numeros = [n.strip() for n in crudos if n.strip()]
+    # Conserva el orden ingresado, pero evita intentar insertar dos veces el
+    # mismo número cuando se repite dentro del propio formulario.
+    numeros = list(dict.fromkeys(n.strip() for n in crudos if n.strip()))
+
+    if not numero_expediente:
+        return RedirectResponse(
+            url="/pecosas?error=Ingresa+el+n%C3%BAmero+de+expediente",
+            status_code=303,
+        )
 
     if not numeros:
         return RedirectResponse(url="/pecosas?error=No+ingresaste+ning%C3%BAn+n%C3%BAmero+de+pecosa", status_code=303)
+
+    existentes = {p.numero for p in db.query(Pecosa.numero).filter(Pecosa.numero.in_(numeros)).all()}
+    duplicadas = [n for n in numeros if n in existentes]
+    nuevas = [n for n in numeros if n not in existentes]
+
+    # No crear un expediente vacío cuando todas las pecosas ya pertenecen al
+    # sistema. Esto también deja intacto un expediente existente si el envío
+    # no contiene nada nuevo.
+    if not nuevas:
+        mensaje = (
+            f"No se registró el expediente {numero_expediente} porque ninguna "
+            "pecosa nueva pudo asignarse."
+        )
+        if duplicadas:
+            mensaje += f" Ya existían: {', '.join(duplicadas)}."
+        return RedirectResponse(url=f"/pecosas?error={mensaje}", status_code=303)
 
     expediente = db.query(Expediente).filter(Expediente.numero == numero_expediente).first()
     if not expediente:
         expediente = Expediente(numero=numero_expediente, fecha_recepcion=date.today())
         db.add(expediente)
         db.flush()
-
-    existentes = {p.numero for p in db.query(Pecosa.numero).filter(Pecosa.numero.in_(numeros)).all()}
-    duplicadas = [n for n in numeros if n in existentes]
-    nuevas = [n for n in numeros if n not in existentes]
 
     for numero in nuevas:
         db.add(Pecosa(numero=numero, expediente_id=expediente.id, fecha_recepcion=date.today()))

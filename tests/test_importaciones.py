@@ -23,6 +23,7 @@ from app.routers.control import (
     _calcular_control, _mover_bien_a_pecosa,
 )
 from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
+from app.routers.pecosas import registrar_pecosas_multiples
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
 from app.services.excel_verificacion import leer_reporte_verificacion
@@ -51,6 +52,62 @@ class ValidacionCargaInicialTest(unittest.TestCase):
         self.db.add(CentroCosto(nombre_depend="CENTRO DE PRUEBA", ipress="001"))
         self.db.commit()
         self.assertTrue(_estado_maestros(self.db)["maestros_listos"])
+
+
+class RegistroMasivoPecosasTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_no_crea_expediente_si_todas_las_pecosas_ya_existen(self):
+        expediente_original = Expediente(numero="50001")
+        self.db.add(expediente_original)
+        self.db.flush()
+        self.db.add(Pecosa(numero="4602", expediente_id=expediente_original.id))
+        self.db.commit()
+
+        respuesta = registrar_pecosas_multiples(
+            request=SimpleNamespace(),
+            numero_expediente="123",
+            numeros_pecosa="4602",
+            db=self.db,
+            _=None,
+        )
+
+        self.assertEqual(respuesta.status_code, 303)
+        self.assertIn("error=", respuesta.headers["location"])
+        self.assertIsNone(
+            self.db.query(Expediente).filter(Expediente.numero == "123").first()
+        )
+        self.assertEqual(self.db.query(Pecosa).count(), 1)
+
+    def test_agrega_solo_nuevas_a_un_expediente_existente(self):
+        expediente = Expediente(numero="50002")
+        self.db.add(expediente)
+        self.db.flush()
+        self.db.add(Pecosa(numero="100", expediente_id=expediente.id))
+        self.db.commit()
+
+        respuesta = registrar_pecosas_multiples(
+            request=SimpleNamespace(),
+            numero_expediente="50002",
+            numeros_pecosa="100\n101\n101,102",
+            db=self.db,
+            _=None,
+        )
+
+        self.assertEqual(respuesta.status_code, 303)
+        pecosas = self.db.query(Pecosa).order_by(Pecosa.numero).all()
+        self.assertEqual([pecosa.numero for pecosa in pecosas], ["100", "101", "102"])
+        self.assertTrue(all(pecosa.expediente_id == expediente.id for pecosa in pecosas))
+        self.assertEqual(
+            self.db.query(Expediente).filter(Expediente.numero == "50002").count(),
+            1,
+        )
 
 
 class CorreccionPecosaTest(unittest.TestCase):

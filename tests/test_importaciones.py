@@ -22,7 +22,10 @@ from app.routers.control import (
     ESTADO_EXCESO, ESTADO_OBSERVADA, ESTADO_PENDIENTE_ALMACEN,
     _calcular_control, _mover_bien_a_pecosa,
 )
-from app.routers.normalizacion import _regularizar_bienes_historicos, _resumen_lote
+from app.routers.normalizacion import (
+    _diferir_pecosa_faltante, _pecosas_no_encontradas,
+    _regularizar_bienes_historicos, _resumen_lote,
+)
 from app.routers.pecosas import registrar_pecosas_multiples
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
@@ -356,6 +359,63 @@ class ExpedientesPorLotesTest(unittest.TestCase):
 
         self.assertEqual(resultado[self.lote_uno.id], ["40001", "40002"])
         self.assertEqual(resultado[self.lote_dos.id], ["40002"])
+
+
+class LotesParcialesTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        expediente = Expediente(numero="57725")
+        lote = LoteCarga(
+            anio="2026", ejecutora="785", pecosas_solicitadas="4601,4602",
+        )
+        self.db.add_all([expediente, lote])
+        self.db.flush()
+        self.pecosa_procesada = Pecosa(
+            numero="4601", expediente_id=expediente.id, estado="Normalizada",
+        )
+        self.pecosa_faltante = Pecosa(
+            numero="4602", expediente_id=expediente.id, estado="Recibida",
+        )
+        self.db.add_all([self.pecosa_procesada, self.pecosa_faltante])
+        self.db.flush()
+        self.db.add(BienAlta(
+            pecosa_id=self.pecosa_procesada.id,
+            lote_id=lote.id,
+            codigo_patrimonial="740899502020",
+            descripcion="BIEN PROCESADO",
+        ))
+        self.db.commit()
+        self.lote = lote
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_difiere_pecosa_sin_filas_y_completa_el_lote_parcial(self):
+        bienes = self.db.query(BienAlta).filter(BienAlta.lote_id == self.lote.id).all()
+        self.assertEqual(_pecosas_no_encontradas(self.lote, bienes), ["4602"])
+
+        correcto, _ = _diferir_pecosa_faltante(
+            self.db, self.lote, self.pecosa_faltante.numero,
+        )
+
+        self.assertTrue(correcto)
+        self.assertEqual(self.lote.pecosas_solicitadas, "4601")
+        self.assertEqual(self.pecosa_faltante.estado, "Recibida")
+        self.assertEqual(_pecosas_no_encontradas(self.lote, bienes), [])
+
+    def test_no_permite_dejar_un_lote_sin_pecosas_procesadas(self):
+        self.lote.pecosas_solicitadas = "4602"
+        self.db.commit()
+
+        correcto, mensaje = _diferir_pecosa_faltante(
+            self.db, self.lote, self.pecosa_faltante.numero,
+        )
+
+        self.assertFalse(correcto)
+        self.assertIn("sin ninguna pecosa procesada", mensaje)
+        self.assertEqual(self.lote.pecosas_solicitadas, "4602")
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

@@ -231,35 +231,51 @@ def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa
 async def procesar_reporte(
     request: Request,
     archivo: UploadFile = File(...),
-    expedientes_seleccionados: list[str] = Form(...),
+    pecosas_seleccionadas: list[str] = Form(default=[]),
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
-    pecosas = (
-        db.query(Pecosa)
-        .join(Expediente)
-        .filter(Expediente.numero.in_(expedientes_seleccionados), Pecosa.estado == "Recibida")
-        .all()
-    )
-    if not pecosas:
+    numeros_seleccionados = list(dict.fromkeys(
+        str(numero).strip() for numero in pecosas_seleccionadas if str(numero).strip()
+    ))
+    if not numeros_seleccionados:
         return RedirectResponse(
-            url="/normalizacion?error=No+hay+pecosas+pendientes+en+los+expedientes+elegidos",
+            url="/normalizacion?error=Selecciona+al+menos+una+pecosa+para+crear+el+lote",
             status_code=303,
         )
-    pecosas_seleccionadas = [p.numero for p in pecosas]
+
+    pecosas_disponibles = (
+        db.query(Pecosa)
+        .filter(Pecosa.numero.in_(numeros_seleccionados), Pecosa.estado == "Recibida")
+        .all()
+    )
+    pecosas_por_numero = {pecosa.numero: pecosa for pecosa in pecosas_disponibles}
+    no_disponibles = [
+        numero for numero in numeros_seleccionados if numero not in pecosas_por_numero
+    ]
+    if no_disponibles:
+        mensaje = (
+            "Estas pecosas ya no están pendientes o no existen: "
+            f"{', '.join(no_disponibles)}. Actualiza la página y vuelve a intentarlo."
+        )
+        return RedirectResponse(
+            url=f"/normalizacion?error={quote(mensaje)}",
+            status_code=303,
+        )
+    pecosas = [pecosas_por_numero[numero] for numero in numeros_seleccionados]
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await archivo.read())
         ruta_temporal = tmp.name
     try:
         df = leer_reporte_siga(ruta_temporal)
-        df_filtrado = filtrar_por_pecosas(df, pecosas_seleccionadas)
+        df_filtrado = filtrar_por_pecosas(df, numeros_seleccionados)
     finally:
         os.remove(ruta_temporal)
 
     lote = LoteCarga(
         anio=ANIO_INVENTARIO, ejecutora=EJECUTORA,
-        pecosas_solicitadas=",".join(pecosas_seleccionadas),
+        pecosas_solicitadas=",".join(numeros_seleccionados),
     )
     db.add(lote)
     db.flush()
@@ -477,6 +493,60 @@ def _pecosas_no_encontradas(lote, bienes):
     solicitadas = [p for p in lote.pecosas_solicitadas.split(",") if p]
     con_bienes = {b.pecosa.numero for b in bienes if b.pecosa}
     return [p for p in solicitadas if p not in con_bienes]
+
+
+def _diferir_pecosa_faltante(db: Session, lote: LoteCarga, numero_pecosa: str):
+    """Retira del lote una pecosa sin filas y la deja para un lote posterior."""
+    bienes = (
+        db.query(BienAlta)
+        .options(joinedload(BienAlta.pecosa))
+        .filter(BienAlta.lote_id == lote.id)
+        .all()
+    )
+    faltantes = _pecosas_no_encontradas(lote, bienes)
+    if numero_pecosa not in faltantes:
+        return False, "La pecosa no está pendiente de retiro en este lote."
+
+    solicitadas = [
+        numero for numero in (lote.pecosas_solicitadas or "").split(",") if numero
+    ]
+    restantes = [numero for numero in solicitadas if numero != numero_pecosa]
+    pecosas_con_bienes = {bien.pecosa.numero for bien in bienes if bien.pecosa}
+    if not restantes or not pecosas_con_bienes.intersection(restantes):
+        return False, "No se puede dejar el lote sin ninguna pecosa procesada."
+
+    lote.pecosas_solicitadas = ",".join(restantes)
+    pecosa = db.query(Pecosa).filter(Pecosa.numero == numero_pecosa).first()
+    if pecosa:
+        tiene_bienes = db.query(BienAlta.id).filter(BienAlta.pecosa_id == pecosa.id).first()
+        if not tiene_bienes:
+            pecosa.estado = "Recibida"
+    db.commit()
+    return True, f"La pecosa {numero_pecosa} quedó pendiente para un próximo lote."
+
+
+@router.post("/normalizacion/lote/{lote_id}/diferir-pecosa")
+def diferir_pecosa_faltante(
+    lote_id: int,
+    numero_pecosa: str = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    lote = db.query(LoteCarga).get(lote_id)
+    if not lote:
+        return RedirectResponse(
+            url="/normalizacion?error=El+lote+indicado+no+existe",
+            status_code=303,
+        )
+
+    correcto, mensaje = _diferir_pecosa_faltante(
+        db, lote, numero_pecosa.strip()
+    )
+    parametro = "mensaje" if correcto else "error"
+    return RedirectResponse(
+        url=f"/normalizacion/lote/{lote_id}?{parametro}={quote(mensaje)}",
+        status_code=303,
+    )
 
 
 @router.get("/normalizacion/lote/{lote_id}", response_class=HTMLResponse)

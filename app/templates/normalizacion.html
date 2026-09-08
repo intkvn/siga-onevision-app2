@@ -12,23 +12,36 @@
 
 <div class="card mb-4">
     <div class="card-body">
-        <h5>1. Sube el reporte de Altas Institucionales (SIGA) y elige los expedientes de este lote</h5>
+        <h5>1. Sube el reporte de Altas Institucionales (SIGA) y elige las pecosas de este lote</h5>
         {% if not expedientes %}
         <p class="text-muted">No hay pecosas pendientes de normalizar. Regístralas primero en <a href="/pecosas">Pecosas</a>.</p>
         {% else %}
-        <form method="post" action="/normalizacion/procesar" enctype="multipart/form-data">
+        <form method="post" action="/normalizacion/procesar" enctype="multipart/form-data" id="form-normalizacion">
             <div class="mb-3">
                 <label class="form-label">Reporte SIGA (Excel)</label>
                 <input type="file" name="archivo" class="form-control" required>
             </div>
             <div class="mb-3">
-                <label class="form-label">Expedientes pendientes</label>
+                <label class="form-label">Expedientes y pecosas pendientes</label>
+                <p class="text-muted small mb-2">Desmarca las pecosas que todavía no aparezcan en el reporte de SIGA. Permanecerán pendientes para otro lote.</p>
                 {% for numero_exp, pecosas in expedientes.items() %}
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" name="expedientes_seleccionados" value="{{ numero_exp }}" id="exp{{ numero_exp }}" checked>
-                    <label class="form-check-label" for="exp{{ numero_exp }}">
-                        Expediente {{ numero_exp }} — {{ pecosas|length }} pecosa(s): {{ pecosas|join(", ") }}
-                    </label>
+                {% set grupo_id = "grupo-" ~ loop.index %}
+                <div class="border rounded p-2 mb-2" data-grupo-pecosas>
+                    <div class="form-check fw-semibold">
+                        <input class="form-check-input selector-expediente" type="checkbox" id="{{ grupo_id }}" checked>
+                        <label class="form-check-label" for="{{ grupo_id }}">
+                            Expediente {{ numero_exp }}
+                            <span class="text-muted fw-normal">(<span data-conteo>{{ pecosas|length }}</span> de {{ pecosas|length }} pecosas seleccionadas)</span>
+                        </label>
+                    </div>
+                    <div class="ms-4 mt-2 d-flex flex-wrap gap-3">
+                        {% for numero_pecosa in pecosas %}
+                        <div class="form-check">
+                            <input class="form-check-input selector-pecosa" type="checkbox" name="pecosas_seleccionadas" value="{{ numero_pecosa }}" id="pecosa-{{ grupo_id }}-{{ loop.index }}" checked>
+                            <label class="form-check-label" for="pecosa-{{ grupo_id }}-{{ loop.index }}">{{ numero_pecosa }}</label>
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
                 {% endfor %}
             </div>
@@ -82,4 +95,31 @@
     {% endfor %}
     </tbody>
 </table>
+<script>
+document.querySelectorAll('[data-grupo-pecosas]').forEach((grupo) => {
+    const selectorExpediente = grupo.querySelector('.selector-expediente');
+    const pecosas = Array.from(grupo.querySelectorAll('.selector-pecosa'));
+    const conteo = grupo.querySelector('[data-conteo]');
+
+    function actualizarGrupo() {
+        const seleccionadas = pecosas.filter((pecosa) => pecosa.checked).length;
+        conteo.textContent = seleccionadas;
+        selectorExpediente.checked = seleccionadas === pecosas.length;
+        selectorExpediente.indeterminate = seleccionadas > 0 && seleccionadas < pecosas.length;
+    }
+
+    selectorExpediente.addEventListener('change', () => {
+        pecosas.forEach((pecosa) => { pecosa.checked = selectorExpediente.checked; });
+        actualizarGrupo();
+    });
+    pecosas.forEach((pecosa) => pecosa.addEventListener('change', actualizarGrupo));
+});
+
+document.getElementById('form-normalizacion')?.addEventListener('submit', (evento) => {
+    if (!document.querySelector('.selector-pecosa:checked')) {
+        evento.preventDefault();
+        alert('Selecciona al menos una pecosa para crear el lote.');
+    }
+});
+</script>
 {% endblock %}

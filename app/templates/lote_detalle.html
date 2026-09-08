@@ -7,14 +7,27 @@
 {% if request.query_params.get("error") %}
 <div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
 {% endif %}
+{% if request.query_params.get("mensaje") %}
+<div class="alert alert-success">{{ request.query_params.get("mensaje") }}</div>
+{% endif %}
 
 {% if pecosas_no_encontradas %}
 <div class="alert alert-danger">
-    ⚠️ Estas pecosas las marcaste para este lote pero <strong>no aparecieron ninguna fila suya</strong>
-    en el reporte de SIGA que subiste — revisa que el reporte sea el correcto o que el número esté bien
+    Estas pecosas se marcaron para este lote pero <strong>no apareció ninguna fila suya</strong>
+    en el reporte de SIGA que subiste. Revisa que el reporte sea el correcto o que el número esté bien
     escrito en la columna "observaciones" de SIGA:
-    <strong>{{ pecosas_no_encontradas|join(", ") }}</strong>.
-    Mientras esto no se corrija, no se puede generar el archivo (saldría incompleto).
+    <ul class="mb-2 mt-2">
+        {% for numero_pecosa in pecosas_no_encontradas %}
+        <li class="mb-1">
+            <strong>{{ numero_pecosa }}</strong>
+            <form method="post" action="/normalizacion/lote/{{ lote.id }}/diferir-pecosa" class="d-inline ms-2" onsubmit="return confirm('¿Dejar la pecosa {{ numero_pecosa }} pendiente para un próximo lote?');">
+                <input type="hidden" name="numero_pecosa" value="{{ numero_pecosa }}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Dejar para un próximo lote</button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
+    Mientras permanezcan en este lote, no se puede generar el archivo porque saldría incompleto.
     <form method="post" action="/normalizacion/lote/{{ lote.id }}/completar" enctype="multipart/form-data" class="mt-2 d-flex gap-2 align-items-center">
         <input type="file" name="archivo" class="form-control form-control-sm" style="max-width: 350px;" required>
         <button type="submit" class="btn btn-sm btn-outline-danger">Reintentar con otro reporte (solo para las pecosas que faltan)</button>

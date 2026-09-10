@@ -8,9 +8,22 @@ db_url = DATABASE_URL
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
 
-engine = create_engine(db_url, connect_args=connect_args)
+
+def _opciones_engine(url: str) -> dict:
+    """Configura SQLite local y protege PostgreSQL de conexiones vencidas."""
+    if url.startswith("sqlite"):
+        return {"connect_args": {"check_same_thread": False}}
+    if url.startswith("postgresql"):
+        return {
+            "connect_args": {},
+            "pool_pre_ping": True,
+            "pool_recycle": 240,
+        }
+    return {"connect_args": {}}
+
+
+engine = create_engine(db_url, **_opciones_engine(db_url))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

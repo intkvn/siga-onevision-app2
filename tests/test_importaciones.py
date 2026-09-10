@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.database import Base
+from app.database import Base, _opciones_engine
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
     LoteCarga, Persona, RelacionPecosaItem, VerificacionPecosaSiga,
@@ -55,6 +55,22 @@ class ValidacionCargaInicialTest(unittest.TestCase):
         self.db.add(CentroCosto(nombre_depend="CENTRO DE PRUEBA", ipress="001"))
         self.db.commit()
         self.assertTrue(_estado_maestros(self.db)["maestros_listos"])
+
+
+class ConfiguracionConexionTest(unittest.TestCase):
+    def test_postgresql_verifica_y_recicla_conexiones(self):
+        opciones = _opciones_engine("postgresql://usuario:clave@servidor/base")
+
+        self.assertTrue(opciones["pool_pre_ping"])
+        self.assertEqual(opciones["pool_recycle"], 240)
+
+    def test_sqlite_conserva_su_configuracion_local(self):
+        opciones = _opciones_engine("sqlite:///./local_dev.db")
+
+        self.assertEqual(
+            opciones,
+            {"connect_args": {"check_same_thread": False}},
+        )
 
 
 class RegistroMasivoPecosasTest(unittest.TestCase):

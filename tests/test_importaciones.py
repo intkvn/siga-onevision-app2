@@ -31,6 +31,7 @@ from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relaci
 from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
 from app.services.excel_verificacion import leer_reporte_verificacion
 from app.services.lote_status import expedientes_de_lotes
+from app.services.pagination import paginas_visibles, rango_registros
 from app.routers.verificacion import (
     ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
 )
@@ -71,6 +72,32 @@ class ConfiguracionConexionTest(unittest.TestCase):
             opciones,
             {"connect_args": {"check_same_thread": False}},
         )
+
+
+class PaginacionTest(unittest.TestCase):
+    def test_muestra_todas_las_paginas_cuando_son_pocas(self):
+        self.assertEqual(paginas_visibles(3, 5), [1, 2, 3, 4, 5])
+
+    def test_compacta_paginas_intermedias_con_separadores(self):
+        self.assertEqual(
+            paginas_visibles(9, 17),
+            [1, 2, None, 7, 8, 9, 10, 11, None, 16, 17],
+        )
+
+    def test_muestra_extremos_al_inicio_y_final(self):
+        self.assertEqual(
+            paginas_visibles(1, 17),
+            [1, 2, 3, 4, 5, 6, 7, None, 16, 17],
+        )
+        self.assertEqual(
+            paginas_visibles(17, 17),
+            [1, 2, None, 11, 12, 13, 14, 15, 16, 17],
+        )
+
+    def test_calcula_rango_visible(self):
+        self.assertEqual(rango_registros(2, 50, 123), (51, 100))
+        self.assertEqual(rango_registros(3, 50, 123), (101, 123))
+        self.assertEqual(rango_registros(1, 50, 0), (0, 0))
 
 
 class RegistroMasivoPecosasTest(unittest.TestCase):

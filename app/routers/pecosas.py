@@ -1,4 +1,5 @@
 from datetime import date
+from urllib.parse import urlencode
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +11,7 @@ from sqlalchemy import desc, or_
 from app.database import get_db
 from app.models import Pecosa, Expediente, Persona
 from app.auth import requiere_login
+from app.services.pagination import paginas_visibles, rango_registros
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -49,6 +51,15 @@ def listar_pecosas(
         .limit(FILAS_POR_PAGINA)
         .all()
     )
+    registro_inicio, registro_fin = rango_registros(
+        pagina, FILAS_POR_PAGINA, total
+    )
+    paginacion_url = "/pecosas?" + urlencode({
+        "numero": numero,
+        "expediente": expediente,
+        "estado": estado,
+        "firmante": firmante,
+    })
     return templates.TemplateResponse(
         "pecosas.html",
         {
@@ -56,6 +67,10 @@ def listar_pecosas(
             "estados": ESTADOS_PECOSA,
             "filtros": {"numero": numero, "expediente": expediente, "estado": estado, "firmante": firmante},
             "total": total, "pagina": pagina, "total_paginas": total_paginas,
+            "paginas_navegacion": paginas_visibles(pagina, total_paginas),
+            "registro_inicio": registro_inicio,
+            "registro_fin": registro_fin,
+            "paginacion_url": paginacion_url,
         },
     )
 

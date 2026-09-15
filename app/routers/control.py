@@ -3,7 +3,7 @@ import tempfile
 import json
 from collections import defaultdict
 from datetime import date, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, JSONResponse
@@ -18,6 +18,7 @@ from app.models import (
 )
 from app.auth import requiere_login
 from app.services.excel_relacion_pecosas import leer_relacion_pecosas
+from app.services.pagination import paginas_visibles, rango_registros
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -166,6 +167,15 @@ def ver_control(
     pagina = max(1, min(pagina, total_paginas))
     inicio = (pagina - 1) * FILAS_POR_PAGINA
     filas_pagina = filas_filtradas[inicio:inicio + FILAS_POR_PAGINA]
+    registro_inicio, registro_fin = rango_registros(
+        pagina, FILAS_POR_PAGINA, total_filtradas
+    )
+    paginacion_url = "/control?" + urlencode({
+        "numero": numero,
+        "estado": estado,
+        "lote": lote,
+        "expediente_alta": expediente_alta,
+    })
     indice_firma = [
         {
             "clave": f"{fila['ano_eje']}|{fila['nro_pecosa']}",
@@ -200,6 +210,10 @@ def ver_control(
             "total_filtradas": total_filtradas,
             "pagina": pagina,
             "total_paginas": total_paginas,
+            "paginas_navegacion": paginas_visibles(pagina, total_paginas),
+            "registro_inicio": registro_inicio,
+            "registro_fin": registro_fin,
+            "paginacion_url": paginacion_url,
             "indice_firma": indice_firma,
         },
     )

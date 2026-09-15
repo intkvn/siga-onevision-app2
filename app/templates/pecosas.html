@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_paginacion.html" import mostrar_paginacion %}
 {% block titulo %}Pecosas{% endblock %}
 {% block contenido %}
 <h3 class="mb-4">Control de Pecosas</h3>
@@ -78,19 +79,9 @@
     </tbody>
 </table>
 
-<p class="text-muted small">Mostrando {{ pecosas|length }} de {{ total }} pecosa(s).</p>
-{% if total_paginas > 1 %}
-<nav aria-label="Paginación de pecosas" class="d-flex justify-content-between align-items-center mb-3">
-    <span class="text-muted small">Página {{ pagina }} de {{ total_paginas }}</span>
-    <div class="btn-group">
-        {% if pagina > 1 %}
-        <a class="btn btn-sm btn-outline-primary" href="/pecosas?numero={{ filtros.numero|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&firmante={{ filtros.firmante|urlencode }}&pagina={{ pagina - 1 }}">Anterior</a>
-        {% endif %}
-        {% if pagina < total_paginas %}
-        <a class="btn btn-sm btn-outline-primary" href="/pecosas?numero={{ filtros.numero|urlencode }}&expediente={{ filtros.expediente|urlencode }}&estado={{ filtros.estado|urlencode }}&firmante={{ filtros.firmante|urlencode }}&pagina={{ pagina + 1 }}">Siguiente</a>
-        {% endif %}
-    </div>
-</nav>
-{% endif %}
+{{ mostrar_paginacion(
+    paginacion_url, pagina, total_paginas, paginas_navegacion,
+    registro_inicio, registro_fin, total, "pecosas"
+) }}
 
 {% endblock %}

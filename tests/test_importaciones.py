@@ -1,4 +1,5 @@
 import os
+import inspect
 import tempfile
 import unittest
 from datetime import date
@@ -8,6 +9,7 @@ from unittest.mock import patch
 import xlrd
 import xlwt
 import pandas as pd
+from openpyxl import Workbook as OpenpyxlWorkbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -26,9 +28,12 @@ from app.routers.normalizacion import (
     _diferir_pecosa_faltante, _pecosas_no_encontradas,
     _regularizar_bienes_historicos, _resumen_lote,
 )
+from app.routers.impresion import procesar_reporte_qr
 from app.routers.pecosas import registrar_pecosas_multiples
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
-from app.services.excel_onevision import ENCABEZADOS, generar_formato_importacion
+from app.services.excel_onevision import (
+    ENCABEZADOS, generar_formato_importacion, iterar_reporte_qr_onevision,
+)
 from app.services.excel_verificacion import leer_reporte_verificacion
 from app.services.lote_status import expedientes_de_lotes
 from app.services.pagination import paginas_visibles, rango_registros
@@ -72,6 +77,66 @@ class ConfiguracionConexionTest(unittest.TestCase):
             opciones,
             {"connect_args": {"check_same_thread": False}},
         )
+
+
+class LecturaReporteQrTest(unittest.TestCase):
+    def _guardar_libro(self, encabezados, filas):
+        descriptor, ruta = tempfile.mkstemp(suffix=".xlsx")
+        os.close(descriptor)
+        libro = OpenpyxlWorkbook()
+        hoja = libro.active
+        hoja.append(encabezados)
+        for fila in filas:
+            hoja.append(fila)
+        libro.save(ruta)
+        libro.close()
+        self.addCleanup(lambda: os.path.exists(ruta) and os.remove(ruta))
+        return ruta
+
+    def test_lee_progresivamente_solo_las_columnas_del_cruce(self):
+        ruta = self._guardar_libro(
+            ["Código Patrimonial", "Descripción", "Código QR", "Ruta QR"],
+            [
+                [" 740899502020", "BIEN 1", 696554, "https://qr/696554"],
+                ["740899502021", "BIEN 2", None, None],
+            ],
+        )
+
+        filas = list(iterar_reporte_qr_onevision(ruta))
+
+        self.assertEqual(filas, [
+            {
+                "codigo_patrimonial_corregido": "740899502020",
+                "codigo_qr": "696554",
+                "ruta_qr": "https://qr/696554",
+            },
+            {
+                "codigo_patrimonial_corregido": "740899502021",
+                "codigo_qr": "",
+                "ruta_qr": "",
+            },
+        ])
+
+    def test_rechaza_reporte_sin_codigo_patrimonial(self):
+        ruta = self._guardar_libro(
+            ["Descripción", "Código QR"],
+            [["BIEN 1", "696554"]],
+        )
+
+        with self.assertRaisesRegex(ValueError, "Código Patrimonial"):
+            list(iterar_reporte_qr_onevision(ruta))
+
+    def test_rechaza_reporte_sin_codigo_qr(self):
+        ruta = self._guardar_libro(
+            ["Código Patrimonial", "Descripción"],
+            [["740899502020", "BIEN 1"]],
+        )
+
+        with self.assertRaisesRegex(ValueError, "Código QR"):
+            list(iterar_reporte_qr_onevision(ruta))
+
+    def test_el_cruce_no_bloquea_el_event_loop(self):
+        self.assertFalse(inspect.iscoroutinefunction(procesar_reporte_qr))
 
 
 class PaginacionTest(unittest.TestCase):

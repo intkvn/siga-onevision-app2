@@ -6,8 +6,10 @@ Dos cosas:
    (con Código QR y Ruta QR), corrigiendo el bug del código patrimonial
    (llega con el primer carácter vacío) para poder cruzarlo.
 """
+from collections.abc import Iterator
+
 import xlwt
-import pandas as pd
+from openpyxl import load_workbook
 from app.config import ESTADOS
 
 ENCABEZADOS = [
@@ -170,10 +172,83 @@ def corregir_codigo_patrimonial(valor) -> str:
     return solo_digitos[-12:] if len(solo_digitos) >= 12 else solo_digitos
 
 
-def leer_reporte_qr_onevision(ruta_archivo: str) -> pd.DataFrame:
-    """Lee el reporte total de One Visión (con Código QR y Ruta QR) y
-    agrega una columna con el código patrimonial ya corregido, lista
-    para cruzar contra bienes_alta.codigo_patrimonial."""
+def _indice_columna(encabezados: list[str], candidatos: list[str]) -> int | None:
+    for candidato in candidatos:
+        if candidato in encabezados:
+            return encabezados.index(candidato)
+    return None
+
+
+def _texto_excel(valor) -> str:
+    """Convierte una celda a texto sin producir valores como ``None`` o ``123.0``."""
+    if valor is None:
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    return str(valor).strip()
+
+
+def iterar_reporte_qr_onevision(ruta_archivo: str) -> Iterator[dict[str, str]]:
+    """Lee progresivamente solo las columnas necesarias del reporte QR.
+
+    ``read_only`` evita construir en memoria un DataFrame con todo el reporte.
+    Esto es importante porque el archivo de One Visión puede contener muchos
+    más bienes que los pertenecientes al lote que se está cruzando.
+    """
+    libro = load_workbook(ruta_archivo, read_only=True, data_only=True)
+    try:
+        hoja = libro.active
+        filas = hoja.iter_rows(values_only=True)
+        primera_fila = next(filas, None)
+        if primera_fila is None:
+            raise ValueError("El reporte de One Visión está vacío.")
+
+        encabezados = [_texto_excel(valor) for valor in primera_fila]
+        indice_codigo = _indice_columna(
+            encabezados,
+            ["Código Patrimonial", "Codigo Patrimonial", "codigo_patrimonial"],
+        )
+        if indice_codigo is None:
+            raise ValueError(
+                "No se encontró la columna de Código Patrimonial en el reporte de One Visión."
+            )
+
+        indice_qr = _indice_columna(encabezados, ["Código QR", "Codigo QR"])
+        if indice_qr is None:
+            raise ValueError(
+                "No se encontró la columna de Código QR en el reporte de One Visión."
+            )
+        indice_ruta = _indice_columna(encabezados, ["Ruta QR", "URL", "Ruta"])
+
+        for fila in filas:
+            valor_codigo = fila[indice_codigo] if indice_codigo < len(fila) else None
+            codigo = corregir_codigo_patrimonial(valor_codigo)
+            if not codigo:
+                continue
+
+            valor_qr = fila[indice_qr] if indice_qr < len(fila) else None
+            valor_ruta = (
+                fila[indice_ruta]
+                if indice_ruta is not None and indice_ruta < len(fila)
+                else None
+            )
+            yield {
+                "codigo_patrimonial_corregido": codigo,
+                "codigo_qr": _texto_excel(valor_qr),
+                "ruta_qr": _texto_excel(valor_ruta),
+            }
+    finally:
+        libro.close()
+
+
+def leer_reporte_qr_onevision(ruta_archivo: str):
+    """Compatibilidad para usos que todavía necesiten un DataFrame completo.
+
+    El cruce web utiliza :func:`iterar_reporte_qr_onevision` para no cargar el
+    reporte entero en memoria.
+    """
+    import pandas as pd
+
     df = pd.read_excel(ruta_archivo)
     columna_codigo = None
     for candidata in ["Código Patrimonial", "Codigo Patrimonial", "codigo_patrimonial"]:
@@ -181,7 +256,11 @@ def leer_reporte_qr_onevision(ruta_archivo: str) -> pd.DataFrame:
             columna_codigo = candidata
             break
     if columna_codigo is None:
-        raise ValueError("No se encontró la columna de Código Patrimonial en el reporte de One Visión.")
+        raise ValueError(
+            "No se encontró la columna de Código Patrimonial en el reporte de One Visión."
+        )
 
-    df["codigo_patrimonial_corregido"] = df[columna_codigo].apply(corregir_codigo_patrimonial)
+    df["codigo_patrimonial_corregido"] = df[columna_codigo].apply(
+        corregir_codigo_patrimonial
+    )
     return df

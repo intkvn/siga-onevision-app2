@@ -2,6 +2,11 @@
 {% block titulo %}Impresión QR{% endblock %}
 {% block contenido %}
 <h3 class="mb-4">Impresión de stickers QR</h3>
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger" role="alert">
+    {{ request.query_params.get("error") }}
+</div>
+{% endif %}
 <div class="card">
     <div class="card-body">
         <p class="text-muted">
@@ -10,7 +15,7 @@
             cruza contra el lote que elijas, y te devuelve el archivo listo para BarTender
             (hoja "BarTender") y la hoja de impresión física con los expedientes (hoja "Hoja 1").
         </p>
-        <form method="post" action="/impresion/procesar" enctype="multipart/form-data">
+        <form id="form-cruce-impresion" method="post" action="/impresion/procesar" enctype="multipart/form-data">
             <div class="mb-3">
                 <label class="form-label">Lote a cruzar</label>
                 <select name="lote_id" class="form-select" required>
@@ -21,9 +26,14 @@
             </div>
             <div class="mb-3">
                 <label class="form-label">Reporte QR de One Visión (Excel)</label>
-                <input type="file" name="archivo" class="form-control" required>
+                <input type="file" name="archivo" class="form-control" accept=".xlsx" required>
             </div>
-            <button type="submit" class="btn btn-primary">Cruzar y generar hoja de impresión</button>
+            <button id="boton-cruce-impresion" type="submit" class="btn btn-primary">
+                Cruzar y generar hoja de impresión
+            </button>
+            <div id="estado-cruce-impresion" class="alert alert-info mt-3 d-none" role="status">
+                Procesando el reporte. Puedes esperar en esta ventana hasta que aparezca el resultado.
+            </div>
         </form>
     </div>
 </div>
@@ -48,4 +58,12 @@
     {% endfor %}
     </tbody>
 </table>
+<script>
+document.getElementById("form-cruce-impresion").addEventListener("submit", function () {
+    const boton = document.getElementById("boton-cruce-impresion");
+    boton.disabled = true;
+    boton.textContent = "Procesando...";
+    document.getElementById("estado-cruce-impresion").classList.remove("d-none");
+});
+</script>
 {% endblock %}

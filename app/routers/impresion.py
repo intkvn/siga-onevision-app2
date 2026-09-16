@@ -1,8 +1,15 @@
+import logging
 import os
+import shutil
 import tempfile
+import time
 from collections import defaultdict
+from urllib.parse import quote_plus
+from zipfile import BadZipFile
+
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils.exceptions import InvalidFileException
 from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -11,11 +18,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models import LoteCarga, BienAlta, Pecosa
 from app.auth import requiere_login
-from app.services.excel_onevision import leer_reporte_qr_onevision, corregir_codigo_patrimonial
+from app.services.excel_onevision import iterar_reporte_qr_onevision, corregir_codigo_patrimonial
 from app.services.lote_status import expedientes_de_lote, expedientes_de_lotes
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+logger = logging.getLogger(__name__)
 
 ENCABEZADOS_BARTENDER = [
     "Codigo Patrimonial", "Codigo QR", "Ruta QR", "Bien", "Establecimiento",
@@ -77,46 +85,65 @@ def _resumen_impresion_lote(
 
 
 @router.post("/impresion/procesar")
-async def procesar_reporte_qr(
+def procesar_reporte_qr(
     lote_id: int = Form(...),
     archivo: UploadFile = File(...),
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(await archivo.read())
-        ruta_temporal = tmp.name
-
+    inicio = time.perf_counter()
+    ruta_temporal = None
     try:
-        df_qr = leer_reporte_qr_onevision(ruta_temporal)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            ruta_temporal = tmp.name
+            shutil.copyfileobj(archivo.file, tmp, length=1024 * 1024)
+
+        bienes = (
+            db.query(BienAlta)
+            .options(joinedload(BienAlta.pecosa))
+            .filter(BienAlta.lote_id == lote_id)
+            .all()
+        )
+        bienes_por_codigo = {
+            corregir_codigo_patrimonial(b.codigo_patrimonial): b for b in bienes
+        }
+
+        filas_procesadas = 0
+        bienes_actualizados = set()
+        for fila in iterar_reporte_qr_onevision(ruta_temporal):
+            filas_procesadas += 1
+            codigo = fila["codigo_patrimonial_corregido"]
+            bien = bienes_por_codigo.get(codigo)
+            if bien is None:
+                continue
+
+            if fila["codigo_qr"]:
+                bien.codigo_qr = fila["codigo_qr"]
+            if fila["ruta_qr"]:
+                bien.ruta_qr = fila["ruta_qr"]
+
+            if bien.pecosa and bien.codigo_qr:
+                bien.pecosa.estado = "StickerGenerado"
+            bienes_actualizados.add(bien.id)
+
+        db.commit()
+        logger.info(
+            "Cruce de impresión completado: lote=%s filas=%s bienes=%s duracion=%.2fs",
+            lote_id,
+            filas_procesadas,
+            len(bienes_actualizados),
+            time.perf_counter() - inicio,
+        )
+    except (ValueError, OSError, BadZipFile, InvalidFileException) as exc:
+        db.rollback()
+        logger.warning(
+            "No se pudo procesar el reporte QR del lote %s: %s", lote_id, exc
+        )
+        mensaje = quote_plus(str(exc))
+        return RedirectResponse(url=f"/impresion?error={mensaje}", status_code=303)
     finally:
-        os.remove(ruta_temporal)
-
-    bienes = (
-        db.query(BienAlta)
-        .options(joinedload(BienAlta.pecosa))
-        .filter(BienAlta.lote_id == lote_id)
-        .all()
-    )
-    bienes_por_codigo = {corregir_codigo_patrimonial(b.codigo_patrimonial): b for b in bienes}
-
-    for _, fila in df_qr.iterrows():
-        codigo = fila["codigo_patrimonial_corregido"]
-        bien = bienes_por_codigo.get(codigo)
-        if bien is None:
-            continue  # este QR del reporte de One Visión no pertenece a este lote
-
-        for col_qr in ["Código QR", "Codigo QR"]:
-            if col_qr in fila:
-                bien.codigo_qr = str(fila[col_qr])
-        for col_ruta in ["Ruta QR", "URL", "Ruta"]:
-            if col_ruta in fila:
-                bien.ruta_qr = str(fila[col_ruta])
-
-        if bien.pecosa:
-            bien.pecosa.estado = "StickerGenerado"
-
-    db.commit()
+        if ruta_temporal and os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
     return RedirectResponse(url=f"/impresion/resultado/{lote_id}", status_code=303)
 
 

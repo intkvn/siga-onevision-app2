@@ -25,7 +25,8 @@ from app.routers.control import (
     _calcular_control, _mover_bien_a_pecosa,
 )
 from app.routers.normalizacion import (
-    _diferir_pecosa_faltante, _indicadores_cruce_lote, _pecosas_no_encontradas,
+    _completar_bienes_lote, _diferir_pecosa_faltante, _indicadores_cruce_lote,
+    _pecosas_no_encontradas,
     _regularizar_bienes_historicos, _resumen_lote,
 )
 from app.routers.impresion import procesar_reporte_qr
@@ -597,6 +598,102 @@ class LotesParcialesTest(unittest.TestCase):
         self.assertFalse(correcto)
         self.assertIn("sin ninguna pecosa procesada", mensaje)
         self.assertEqual(self.lote.pecosas_solicitadas, "4602")
+
+
+class CompletarLoteParcialTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+        self.expediente = Expediente(numero="60150")
+        self.persona = Persona(nombre_completo="RESPONSABLE HUAGAL", dni="12345678")
+        self.centro = CentroCosto(nombre_depend="HUAGAL", ipress="4501")
+        self.lote = LoteCarga(
+            anio="2026",
+            ejecutora="785",
+            pecosas_solicitadas="4744",
+            archivo_generado="formato_importacion_lote_26.xls",
+        )
+        self.db.add_all([self.expediente, self.persona, self.centro, self.lote])
+        self.db.flush()
+        self.pecosa = Pecosa(
+            numero="4744", expediente_id=self.expediente.id, estado="Normalizada",
+        )
+        self.db.add(self.pecosa)
+        self.db.flush()
+        self.db.add_all([
+            BienAlta(
+                pecosa_id=self.pecosa.id, lote_id=self.lote.id,
+                codigo_patrimonial="740899502001", descripcion="BIEN EXISTENTE 1",
+                persona_id=self.persona.id, centro_costo_id=self.centro.id,
+            ),
+            BienAlta(
+                pecosa_id=self.pecosa.id, lote_id=self.lote.id,
+                codigo_patrimonial="740899502002", descripcion="BIEN EXISTENTE 2",
+                persona_id=self.persona.id, centro_costo_id=self.centro.id,
+            ),
+        ])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def _reporte_corregido(self):
+        filas = [
+            ("740899502001", "BIEN CAMBIADO", "4744"),
+            ("740899502002", "BIEN EXISTENTE 2", "PECOSA 4744-2026"),
+            ("740899502003", "BIEN NUEVO", "4744"),
+            ("740899502003", "BIEN NUEVO REPETIDO", "4744"),
+            ("740899509999", "OTRA PECOSA", "9999"),
+        ]
+        return pd.DataFrame([
+            {
+                "codigo_patrimonial": codigo,
+                "descripcion": descripcion,
+                "observaciones": observacion,
+                "modelo": "MODELO",
+                "marca": "MARCA",
+                "estado_conserv": "1",
+                "nro_serie": "SERIE",
+                "fecha_movimto": "2026-08-31",
+                "nombre_depend": "HUAGAL",
+                "nombre_completo": "RESPONSABLE HUAGAL",
+            }
+            for codigo, descripcion, observacion in filas
+        ])
+
+    def test_agrega_solo_el_bien_faltante_al_mismo_lote_y_expediente(self):
+        resultado = _completar_bienes_lote(
+            self.db, self.lote, self._reporte_corregido()
+        )
+        self.db.commit()
+
+        bienes = self.db.query(BienAlta).order_by(BienAlta.codigo_patrimonial).all()
+        self.assertEqual(resultado["agregados"], 1)
+        self.assertEqual(resultado["agregados_por_pecosa"], {"4744": 1})
+        self.assertEqual(resultado["duplicados_omitidos"], 3)
+        self.assertEqual(len(bienes), 3)
+        self.assertEqual(bienes[-1].codigo_patrimonial, "740899502003")
+        self.assertTrue(all(bien.lote_id == self.lote.id for bien in bienes))
+        self.assertTrue(all(bien.pecosa_id == self.pecosa.id for bien in bienes))
+        self.assertEqual(self.pecosa.expediente_id, self.expediente.id)
+        self.assertEqual(self.db.query(LoteCarga).count(), 1)
+        self.assertEqual(self.db.query(Expediente).count(), 1)
+        self.assertIsNone(self.lote.archivo_generado)
+        self.assertEqual(bienes[0].descripcion, "BIEN EXISTENTE 1")
+
+    def test_repetir_el_reporte_no_duplica_bienes(self):
+        _completar_bienes_lote(self.db, self.lote, self._reporte_corregido())
+        self.db.commit()
+
+        resultado = _completar_bienes_lote(
+            self.db, self.lote, self._reporte_corregido()
+        )
+        self.db.commit()
+
+        self.assertEqual(resultado["agregados"], 0)
+        self.assertEqual(self.db.query(BienAlta).count(), 3)
 
 
 class RegularizacionCargaInicialTest(unittest.TestCase):

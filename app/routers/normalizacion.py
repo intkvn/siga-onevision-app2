@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from collections import defaultdict
 from urllib.parse import quote
@@ -188,10 +189,13 @@ def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa
     en este lote (por si se reintenta subir el mismo reporte)."""
     pecosas_por_clave = {p.numero.lstrip("0") or "0": p for p in pecosas}
     ya_cargados = {
-        (b.pecosa_id, b.codigo_patrimonial)
+        (b.pecosa_id, _texto_siga(b.codigo_patrimonial))
         for b in db.query(BienAlta).filter(BienAlta.lote_id == lote.id).all()
     }
     pecosas_encontradas = set()
+    agregados_por_pecosa = defaultdict(int)
+    duplicados_omitidos = 0
+    filas_sin_codigo = 0
 
     for _, fila in df_filtrado.iterrows():
         numero_pecosa = extraer_numero_pecosa(fila["observaciones"])
@@ -200,9 +204,14 @@ def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa
             continue
         pecosas_encontradas.add(pecosa.numero)
 
-        codigo_patrimonial = str(fila.get("codigo_patrimonial", "")).strip()
-        if (pecosa.id, codigo_patrimonial) in ya_cargados:
-            continue  # ya estaba cargado en este lote, no duplicar
+        codigo_patrimonial = _texto_siga(fila.get("codigo_patrimonial"))
+        if not codigo_patrimonial:
+            filas_sin_codigo += 1
+            continue
+        clave_bien = (pecosa.id, codigo_patrimonial)
+        if clave_bien in ya_cargados:
+            duplicados_omitidos += 1
+            continue  # ya estaba cargado o se repitió dentro del mismo reporte
 
         resultado_cruce = cruzar_fila(db, fila.get("nombre_completo"), fila.get("nombre_depend"))
 
@@ -222,9 +231,55 @@ def _procesar_pecosas_en_lote(db: Session, lote: LoteCarga, pecosas: list[Pecosa
             centro_costo_id=resultado_cruce["centro_costo"].id if resultado_cruce["centro_costo"] else None,
         )
         db.add(bien)
+        ya_cargados.add(clave_bien)
+        agregados_por_pecosa[pecosa.numero] += 1
         pecosa.estado = "Normalizada"
 
-    return pecosas_encontradas
+    return {
+        "pecosas_encontradas": pecosas_encontradas,
+        "agregados": sum(agregados_por_pecosa.values()),
+        "agregados_por_pecosa": dict(agregados_por_pecosa),
+        "duplicados_omitidos": duplicados_omitidos,
+        "filas_sin_codigo": filas_sin_codigo,
+    }
+
+
+def _completar_bienes_lote(db: Session, lote: LoteCarga, df) -> dict:
+    """Agrega al lote solo los bienes nuevos del reporte SIGA corregido.
+
+    No crea lotes, no modifica el expediente de una pecosa y no reemplaza
+    bienes existentes. Si el lote ya tenía un archivo generado, lo invalida
+    únicamente cuando se incorpora al menos un bien nuevo.
+    """
+    numeros_lote = list(dict.fromkeys(
+        numero.strip()
+        for numero in (lote.pecosas_solicitadas or "").split(",")
+        if numero.strip()
+    ))
+    if not numeros_lote:
+        raise ValueError("Este lote no tiene pecosas registradas para completar.")
+
+    pecosas = db.query(Pecosa).filter(Pecosa.numero.in_(numeros_lote)).all()
+    pecosas_por_numero = {pecosa.numero: pecosa for pecosa in pecosas}
+    no_encontradas = [
+        numero for numero in numeros_lote if numero not in pecosas_por_numero
+    ]
+    if no_encontradas:
+        raise ValueError(
+            "No se encontraron estas pecosas del lote en la base de datos: "
+            + ", ".join(no_encontradas)
+        )
+
+    df_filtrado = filtrar_por_pecosas(df, numeros_lote)
+    resultado = _procesar_pecosas_en_lote(
+        db,
+        lote,
+        [pecosas_por_numero[numero] for numero in numeros_lote],
+        df_filtrado,
+    )
+    if resultado["agregados"]:
+        lote.archivo_generado = None
+    return resultado
 
 
 @router.post("/normalizacion/procesar")
@@ -437,35 +492,60 @@ async def regularizar_carga_inicial(
 
 
 @router.post("/normalizacion/lote/{lote_id}/completar")
-async def completar_lote(
+def completar_lote(
     lote_id: int,
     archivo: UploadFile = File(...),
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
 ):
-    """Reintenta con otro reporte de SIGA, pero SOLO para las pecosas de
-    este mismo lote que todavía no se encontraron — no crea un lote nuevo
-    ni duplica lo que ya estaba bien."""
+    """Agrega bienes faltantes al mismo lote desde un reporte SIGA corregido."""
     lote = db.query(LoteCarga).get(lote_id)
-    bienes_actuales = db.query(BienAlta).filter(BienAlta.lote_id == lote_id).all()
-    faltantes = _pecosas_no_encontradas(lote, bienes_actuales)
-    if not faltantes:
-        return RedirectResponse(url=f"/normalizacion/lote/{lote_id}", status_code=303)
+    if not lote:
+        return RedirectResponse(
+            url="/normalizacion?error=El+lote+indicado+no+existe", status_code=303
+        )
 
-    pecosas = db.query(Pecosa).filter(Pecosa.numero.in_(faltantes)).all()
+    extension = os.path.splitext(archivo.filename or "")[1].lower() or ".xlsx"
+    if extension not in {".xls", ".xlsx"}:
+        mensaje = quote("El archivo debe tener formato .xls o .xlsx.")
+        return RedirectResponse(
+            url=f"/normalizacion/lote/{lote_id}?error={mensaje}", status_code=303
+        )
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(await archivo.read())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
         ruta_temporal = tmp.name
+        shutil.copyfileobj(archivo.file, tmp, length=1024 * 1024)
     try:
         df = leer_reporte_siga(ruta_temporal)
-        df_filtrado = filtrar_por_pecosas(df, faltantes)
+        resultado = _completar_bienes_lote(db, lote, df)
+        db.commit()
+    except (ValueError, OSError) as error:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/normalizacion/lote/{lote_id}?error={quote(str(error))}",
+            status_code=303,
+        )
     finally:
-        os.remove(ruta_temporal)
+        if os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
 
-    _procesar_pecosas_en_lote(db, lote, pecosas, df_filtrado)
-    db.commit()
-    return RedirectResponse(url=f"/normalizacion/lote/{lote_id}", status_code=303)
+    if resultado["agregados"]:
+        detalle = ", ".join(
+            f"pecosa {numero}: {cantidad}"
+            for numero, cantidad in sorted(resultado["agregados_por_pecosa"].items())
+        )
+        mensaje = (
+            f"Se agregaron {resultado['agregados']} bien(es) al lote ({detalle}). "
+            f"Se omitieron {resultado['duplicados_omitidos']} fila(s) ya registradas."
+        )
+    else:
+        mensaje = (
+            "No se agregaron bienes nuevos. El reporte no contiene filas nuevas "
+            "para las pecosas de este lote."
+        )
+    return RedirectResponse(
+        url=f"/normalizacion/lote/{lote_id}?mensaje={quote(mensaje)}", status_code=303
+    )
 
 
 def pd_to_datetime(valor):

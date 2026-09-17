@@ -4,6 +4,69 @@
 <h3 class="mb-1">Lote #{{ lote.id }}</h3>
 <p class="text-muted">Expedientes: {{ expedientes|join(", ") if expedientes else "-" }}</p>
 
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 text-center">
+            <div class="card-body">
+                <div class="fs-3 fw-semibold">{{ indicadores.total }}</div>
+                <div class="text-muted">Bienes del lote</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 text-center border-success">
+            <div class="card-body">
+                <div class="fs-3 fw-semibold text-success">{{ indicadores.correctos }}</div>
+                <div class="text-muted">Cruce correcto</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 text-center {{ 'border-warning' if indicadores.pendientes else '' }}">
+            <div class="card-body">
+                <div class="fs-3 fw-semibold {{ 'text-warning' if indicadores.pendientes else '' }}">{{ indicadores.pendientes }}</div>
+                <div class="text-muted">Cruce pendiente</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 text-center {{ 'border-danger' if indicadores.pecosas_no_encontradas else '' }}">
+            <div class="card-body">
+                <div class="fs-3 fw-semibold {{ 'text-danger' if indicadores.pecosas_no_encontradas else '' }}">{{ indicadores.pecosas_no_encontradas }}</div>
+                <div class="text-muted">Pecosas no encontradas</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if indicadores.por_expediente %}
+<h5>Bienes por expediente</h5>
+<div class="table-responsive mb-4">
+    <table class="table table-sm table-bordered bg-white align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Expediente</th>
+                <th>Pecosas</th>
+                <th class="text-center">Total bienes</th>
+                <th class="text-center">Cruce correcto</th>
+                <th class="text-center">Pendientes</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for fila in indicadores.por_expediente %}
+            <tr>
+                <td class="fw-semibold">{{ fila.expediente }}</td>
+                <td>{{ fila.pecosas|join(", ") if fila.pecosas else "-" }}</td>
+                <td class="text-center">{{ fila.total }}</td>
+                <td class="text-center text-success fw-semibold">{{ fila.correctos }}</td>
+                <td class="text-center {{ 'text-warning fw-semibold' if fila.pendientes else '' }}">{{ fila.pendientes }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 {% if request.query_params.get("error") %}
 <div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
 {% endif %}

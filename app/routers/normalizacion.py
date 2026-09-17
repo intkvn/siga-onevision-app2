@@ -485,6 +485,63 @@ def _cruce_incompleto(b):
     return sin_persona or sin_centro
 
 
+def _indicadores_cruce_lote(bienes, pecosas_lote=None) -> dict:
+    """Resume el cruce del lote y lo distribuye por expediente.
+
+    ``pecosas_lote`` incluye también las pecosas seleccionadas que todavía no
+    produjeron filas en el reporte SIGA, para que su expediente no desaparezca
+    del resumen por tener cero bienes.
+    """
+    por_expediente = {}
+
+    for pecosa in pecosas_lote or []:
+        if not pecosa.expediente:
+            continue
+        numero = pecosa.expediente.numero
+        resumen = por_expediente.setdefault(
+            numero,
+            {"expediente": numero, "pecosas": set(), "total": 0, "correctos": 0},
+        )
+        resumen["pecosas"].add(pecosa.numero)
+
+    correctos = 0
+    for bien in bienes:
+        completo = not _cruce_incompleto(bien)
+        if completo:
+            correctos += 1
+
+        pecosa = bien.pecosa
+        expediente = pecosa.expediente if pecosa else None
+        if not expediente:
+            continue
+        numero = expediente.numero
+        resumen = por_expediente.setdefault(
+            numero,
+            {"expediente": numero, "pecosas": set(), "total": 0, "correctos": 0},
+        )
+        resumen["total"] += 1
+        resumen["correctos"] += int(completo)
+        resumen["pecosas"].add(pecosa.numero)
+
+    def clave_orden(numero):
+        return (0, int(numero)) if str(numero).isdigit() else (1, str(numero))
+
+    detalle = []
+    for numero in sorted(por_expediente, key=clave_orden):
+        resumen = por_expediente[numero]
+        resumen["pecosas"] = sorted(resumen["pecosas"], key=clave_orden)
+        resumen["cantidad_pecosas"] = len(resumen["pecosas"])
+        resumen["pendientes"] = resumen["total"] - resumen["correctos"]
+        detalle.append(resumen)
+
+    return {
+        "total": len(bienes),
+        "correctos": correctos,
+        "pendientes": len(bienes) - correctos,
+        "por_expediente": detalle,
+    }
+
+
 def _pecosas_no_encontradas(lote, bienes):
     """Pecosas que se marcaron para este lote pero no tienen ningún bien
     (no aparecieron en el reporte de SIGA que se subió)."""
@@ -552,10 +609,21 @@ def diferir_pecosa_faltante(
 @router.get("/normalizacion/lote/{lote_id}", response_class=HTMLResponse)
 def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=Depends(requiere_login)):
     lote = db.query(LoteCarga).get(lote_id)
+    numeros_pecosa = [
+        numero for numero in (lote.pecosas_solicitadas or "").split(",") if numero
+    ]
+    pecosas_lote = []
+    if numeros_pecosa:
+        pecosas_lote = (
+            db.query(Pecosa)
+            .options(joinedload(Pecosa.expediente))
+            .filter(Pecosa.numero.in_(numeros_pecosa))
+            .all()
+        )
     bienes = (
         db.query(BienAlta)
         .options(
-            joinedload(BienAlta.pecosa),
+            joinedload(BienAlta.pecosa).joinedload(Pecosa.expediente),
             joinedload(BienAlta.persona),
             joinedload(BienAlta.centro_costo),
         )
@@ -566,6 +634,8 @@ def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=De
     centros = db.query(CentroCosto).order_by(CentroCosto.nombre_depend).all()
     pendientes = [b for b in bienes if _cruce_incompleto(b)]
     pecosas_no_encontradas = _pecosas_no_encontradas(lote, bienes)
+    indicadores = _indicadores_cruce_lote(bienes, pecosas_lote)
+    indicadores["pecosas_no_encontradas"] = len(pecosas_no_encontradas)
     puede_generar = not pendientes and not pecosas_no_encontradas and bienes
     return templates.TemplateResponse(
         "lote_detalle.html",
@@ -575,7 +645,8 @@ def ver_lote(lote_id: int, request: Request, db: Session = Depends(get_db), _=De
             "pendientes": pendientes, "estados": ESTADOS,
             "pecosas_no_encontradas": pecosas_no_encontradas,
             "puede_generar": puede_generar,
-            "expedientes": expedientes_de_lote(db, lote),
+            "expedientes": [fila["expediente"] for fila in indicadores["por_expediente"]],
+            "indicadores": indicadores,
         },
     )
 

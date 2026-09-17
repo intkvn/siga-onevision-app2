@@ -25,7 +25,7 @@ from app.routers.control import (
     _calcular_control, _mover_bien_a_pecosa,
 )
 from app.routers.normalizacion import (
-    _diferir_pecosa_faltante, _pecosas_no_encontradas,
+    _diferir_pecosa_faltante, _indicadores_cruce_lote, _pecosas_no_encontradas,
     _regularizar_bienes_historicos, _resumen_lote,
 )
 from app.routers.impresion import procesar_reporte_qr
@@ -137,6 +137,79 @@ class LecturaReporteQrTest(unittest.TestCase):
 
     def test_el_cruce_no_bloquea_el_event_loop(self):
         self.assertFalse(inspect.iscoroutinefunction(procesar_reporte_qr))
+
+
+class IndicadoresCruceLoteTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_resume_total_y_bienes_por_expediente(self):
+        expediente_1 = Expediente(numero="60144")
+        expediente_2 = Expediente(numero="60150")
+        persona = Persona(nombre_completo="PERSONA COMPLETA", dni="12345678")
+        centro = CentroCosto(nombre_depend="CENTRO COMPLETO", ipress="10460")
+        lote = LoteCarga(
+            anio="2026", ejecutora="785", pecosas_solicitadas="4719,4720,4721",
+        )
+        self.db.add_all([expediente_1, expediente_2, persona, centro, lote])
+        self.db.flush()
+
+        pecosa_1 = Pecosa(numero="4719", expediente_id=expediente_1.id)
+        pecosa_2 = Pecosa(numero="4720", expediente_id=expediente_1.id)
+        pecosa_sin_bienes = Pecosa(numero="4721", expediente_id=expediente_2.id)
+        self.db.add_all([pecosa_1, pecosa_2, pecosa_sin_bienes])
+        self.db.flush()
+
+        bienes = [
+            BienAlta(
+                pecosa_id=pecosa_1.id, lote_id=lote.id,
+                codigo_patrimonial="740899502020", descripcion="BIEN COMPLETO 1",
+                persona_id=persona.id, centro_costo_id=centro.id,
+            ),
+            BienAlta(
+                pecosa_id=pecosa_1.id, lote_id=lote.id,
+                codigo_patrimonial="740899502021", descripcion="BIEN PENDIENTE",
+                centro_costo_id=centro.id,
+            ),
+            BienAlta(
+                pecosa_id=pecosa_2.id, lote_id=lote.id,
+                codigo_patrimonial="740899502022", descripcion="BIEN COMPLETO 2",
+                persona_id=persona.id, centro_costo_id=centro.id,
+            ),
+        ]
+        self.db.add_all(bienes)
+        self.db.commit()
+
+        resultado = _indicadores_cruce_lote(
+            bienes, [pecosa_1, pecosa_2, pecosa_sin_bienes]
+        )
+
+        self.assertEqual(resultado["total"], 3)
+        self.assertEqual(resultado["correctos"], 2)
+        self.assertEqual(resultado["pendientes"], 1)
+        self.assertEqual(resultado["por_expediente"], [
+            {
+                "expediente": "60144",
+                "pecosas": ["4719", "4720"],
+                "cantidad_pecosas": 2,
+                "total": 3,
+                "correctos": 2,
+                "pendientes": 1,
+            },
+            {
+                "expediente": "60150",
+                "pecosas": ["4721"],
+                "cantidad_pecosas": 1,
+                "total": 0,
+                "correctos": 0,
+                "pendientes": 0,
+            },
+        ])
 
 
 class PaginacionTest(unittest.TestCase):

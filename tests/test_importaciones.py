@@ -21,8 +21,9 @@ from app.models import (
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import (
-    ESTADO_EXCESO, ESTADO_OBSERVADA, ESTADO_PENDIENTE_ALMACEN,
-    _calcular_control, _mover_bien_a_pecosa,
+    ESTADO_COMPLETA, ESTADO_EXCESO, ESTADO_FALTA_FIRMA, ESTADO_OBSERVADA,
+    ESTADO_PENDIENTE_ALMACEN,
+    _calcular_control, _filtrar_filas_control, _mover_bien_a_pecosa,
 )
 from app.routers.normalizacion import (
     _completar_bienes_lote, _diferir_pecosa_faltante, _indicadores_cruce_lote,
@@ -237,6 +238,47 @@ class PaginacionTest(unittest.TestCase):
         self.assertEqual(rango_registros(2, 50, 123), (51, 100))
         self.assertEqual(rango_registros(3, 50, 123), (101, 123))
         self.assertEqual(rango_registros(1, 50, 0), (0, 0))
+
+
+class FiltrosControlTest(unittest.TestCase):
+    def setUp(self):
+        self.filas = [
+            {
+                "nro_pecosa": "1200", "estado": ESTADO_COMPLETA,
+                "lotes": [22], "expediente_alta": "31863",
+                "expediente_firma": "52607",
+            },
+            {
+                "nro_pecosa": "1212", "estado": ESTADO_FALTA_FIRMA,
+                "lotes": [22], "expediente_alta": "31864",
+                "expediente_firma": "52607",
+            },
+            {
+                "nro_pecosa": "1227", "estado": ESTADO_COMPLETA,
+                "lotes": [23], "expediente_alta": "31865",
+                "expediente_firma": "53001",
+            },
+        ]
+
+    def test_filtra_por_numero_parcial_de_expediente_firma(self):
+        resultado = _filtrar_filas_control(
+            self.filas, expediente_firma="526"
+        )
+
+        self.assertEqual(
+            [fila["nro_pecosa"] for fila in resultado], ["1200", "1212"]
+        )
+
+    def test_combina_expediente_firma_con_estado_firmada(self):
+        resultado = _filtrar_filas_control(
+            self.filas,
+            expediente_firma="52607",
+            estado=ESTADO_COMPLETA,
+        )
+
+        self.assertEqual(
+            [fila["nro_pecosa"] for fila in resultado], ["1200"]
+        )
 
 
 class RegistroMasivoPecosasTest(unittest.TestCase):

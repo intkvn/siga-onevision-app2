@@ -37,6 +37,42 @@ CAUSALES_OBSERVACION = [
 FILAS_POR_PAGINA = 50
 
 
+def _filtrar_filas_control(
+    filas: list[dict],
+    numero: str = "",
+    estado: str = "",
+    lote: str = "",
+    expediente_alta: str = "",
+    expediente_firma: str = "",
+) -> list[dict]:
+    """Aplica conjuntamente los filtros visibles del Control General."""
+    resultado = filas
+    if numero.strip():
+        termino = numero.strip()
+        resultado = [fila for fila in resultado if termino in fila["nro_pecosa"]]
+    if estado:
+        resultado = [fila for fila in resultado if fila["estado"] == estado]
+    if lote.strip():
+        termino = lote.strip()
+        resultado = [
+            fila for fila in resultado
+            if termino in {str(valor) for valor in fila["lotes"]}
+        ]
+    if expediente_alta.strip():
+        termino = expediente_alta.strip().lower()
+        resultado = [
+            fila for fila in resultado
+            if termino in str(fila["expediente_alta"] or "").lower()
+        ]
+    if expediente_firma.strip():
+        termino = expediente_firma.strip().lower()
+        resultado = [
+            fila for fila in resultado
+            if termino in str(fila["expediente_firma"] or "").lower()
+        ]
+    return resultado
+
+
 def _calcular_control(
     db: Session, pecosas_db: dict[str, Pecosa] | None = None
 ) -> list[dict]:
@@ -130,6 +166,7 @@ def ver_control(
     estado: str = "",
     lote: str = "",
     expediente_alta: str = "",
+    expediente_firma: str = "",
     pagina: int = 1,
     db: Session = Depends(get_db),
     _=Depends(requiere_login),
@@ -145,18 +182,14 @@ def ver_control(
     for f in filas:
         resumen[f["estado"]] += 1
 
-    filas_filtradas = filas
-    if numero:
-        filas_filtradas = [f for f in filas_filtradas if numero.strip() in f["nro_pecosa"]]
-    if estado:
-        filas_filtradas = [f for f in filas_filtradas if f["estado"] == estado]
-    if lote:
-        filas_filtradas = [f for f in filas_filtradas if lote.strip() in {str(valor) for valor in f["lotes"]}]
-    if expediente_alta:
-        filas_filtradas = [
-            f for f in filas_filtradas
-            if expediente_alta.strip() in str(f["expediente_alta"] or "")
-        ]
+    filas_filtradas = _filtrar_filas_control(
+        filas,
+        numero=numero,
+        estado=estado,
+        lote=lote,
+        expediente_alta=expediente_alta,
+        expediente_firma=expediente_firma,
+    )
 
     lotes = sorted({str(lote_id) for fila in filas for lote_id in fila["lotes"]}, key=int)
     expedientes_alta = sorted({
@@ -175,6 +208,7 @@ def ver_control(
         "estado": estado,
         "lote": lote,
         "expediente_alta": expediente_alta,
+        "expediente_firma": expediente_firma,
     })
     indice_firma = [
         {
@@ -206,6 +240,7 @@ def ver_control(
             "filtros": {
                 "numero": numero, "estado": estado, "lote": lote,
                 "expediente_alta": expediente_alta,
+                "expediente_firma": expediente_firma,
             },
             "total_filtradas": total_filtradas,
             "pagina": pagina,

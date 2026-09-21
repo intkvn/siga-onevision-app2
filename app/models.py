@@ -8,7 +8,7 @@ LoteCarga agrupa un envío de normalización/carga a One Visión.
 """
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Date, DateTime, ForeignKey, Text, UniqueConstraint
+    Column, Integer, String, Date, DateTime, Float, ForeignKey, Text, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -79,6 +79,27 @@ class LoteCarga(Base):
     pecosas_solicitadas = Column(Text, nullable=True)  # CSV de números de pecosa elegidos al procesar
 
     bienes = relationship("BienAlta", back_populates="lote")
+
+
+class PerfilImpresionEtiqueta(Base):
+    """Configuración persistente para el PDF de etiquetas de la impresora."""
+    __tablename__ = "perfiles_impresion_etiquetas"
+
+    id = Column(Integer, primary_key=True)
+    nombre = Column(String(100), unique=True, nullable=False)
+    ancho_pagina_mm = Column(Float, nullable=False, default=105.1)
+    ancho_etiqueta_mm = Column(Float, nullable=False, default=50.8)
+    alto_etiqueta_mm = Column(Float, nullable=False, default=38.1)
+    margen_izquierdo_mm = Column(Float, nullable=False, default=0.75)
+    margen_derecho_mm = Column(Float, nullable=False, default=0.75)
+    separacion_central_mm = Column(Float, nullable=False, default=2.0)
+    avance_adicional_mm = Column(Float, nullable=False, default=0.0)
+    desplazamiento_x_mm = Column(Float, nullable=False, default=0.0)
+    desplazamiento_y_mm = Column(Float, nullable=False, default=0.0)
+    rotacion_contenido = Column(Integer, nullable=False, default=180)
+    anio_1 = Column(String(4), nullable=False, default="2026")
+    anio_2 = Column(String(4), nullable=False, default="2027")
+    anio_marcado = Column(String(4), nullable=False, default="2026")
 
 
 class RelacionPecosaItem(Base):

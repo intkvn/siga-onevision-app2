@@ -10,16 +10,21 @@ from zipfile import BadZipFile
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils.exceptions import InvalidFileException
-from fastapi import APIRouter, Request, Form, Depends, UploadFile, File
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
+from fastapi import APIRouter, Request, Form, Depends, UploadFile, File, HTTPException
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import LoteCarga, BienAlta, Pecosa
+from app.models import LoteCarga, BienAlta, Pecosa, PerfilImpresionEtiqueta
 from app.auth import requiere_login
 from app.services.excel_onevision import iterar_reporte_qr_onevision, corregir_codigo_patrimonial
 from app.services.lote_status import expedientes_de_lote, expedientes_de_lotes
+from app.services.pdf_etiquetas import (
+    NOMBRE_PERFIL_PREDETERMINADO,
+    clasificar_bienes_impresion,
+    generar_pdf_etiquetas,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -73,7 +78,7 @@ def _resumen_impresion_lote(
     elif len(con_qr) < len(bienes):
         estado = f"Parcial ({len(con_qr)}/{len(bienes)})"
     else:
-        estado = "Completo — listo para BarTender"
+        estado = "Completo - listo para BarTender"
 
     return {
         "lote": lote,
@@ -155,18 +160,220 @@ def resultado_impresion(
     reporte de One Visión que subiste) y cuáles todavía no."""
     bienes = (
         db.query(BienAlta)
-        .options(joinedload(BienAlta.pecosa))
+        .options(
+            joinedload(BienAlta.pecosa),
+            joinedload(BienAlta.centro_costo),
+        )
         .filter(BienAlta.lote_id == lote_id)
+        .order_by(BienAlta.id)
         .all()
     )
     encontrados = [b for b in bienes if b.codigo_qr]
     no_encontrados = [b for b in bienes if not b.codigo_qr]
+    imprimibles, excluidos_pdf = clasificar_bienes_impresion(bienes)
+    perfil = _obtener_perfil_impresion(db)
     return templates.TemplateResponse(
         "impresion_resultado.html",
         {
             "request": request, "lote_id": lote_id,
             "encontrados": encontrados, "no_encontrados": no_encontrados,
+            "imprimibles": imprimibles,
+            "excluidos_pdf": excluidos_pdf,
+            "perfil": perfil,
+            "ancho_pagina_pdf": perfil.ancho_pagina_mm,
+            "alto_pagina_pdf": perfil.alto_etiqueta_mm + perfil.avance_adicional_mm,
         },
+    )
+
+
+def _obtener_perfil_impresion(db: Session) -> PerfilImpresionEtiqueta:
+    perfil = (
+        db.query(PerfilImpresionEtiqueta)
+        .filter(PerfilImpresionEtiqueta.nombre == NOMBRE_PERFIL_PREDETERMINADO)
+        .first()
+    )
+    if perfil:
+        # Los perfiles creados antes de adaptar el PDF al controlador Argox
+        # usaban 90/270 grados. Se normalizan una sola vez al nuevo sistema.
+        if perfil.rotacion_contenido not in (0, 180):
+            perfil.rotacion_contenido = 0
+            db.commit()
+            db.refresh(perfil)
+        return perfil
+
+    perfil = PerfilImpresionEtiqueta(
+        nombre=NOMBRE_PERFIL_PREDETERMINADO,
+        ancho_pagina_mm=105.1,
+        ancho_etiqueta_mm=50.8,
+        alto_etiqueta_mm=38.1,
+        margen_izquierdo_mm=0.75,
+        margen_derecho_mm=0.75,
+        separacion_central_mm=2.0,
+        avance_adicional_mm=0.0,
+        desplazamiento_x_mm=0.0,
+        desplazamiento_y_mm=0.0,
+        rotacion_contenido=180,
+        anio_1="2026",
+        anio_2="2027",
+        anio_marcado="2026",
+    )
+    db.add(perfil)
+    db.commit()
+    db.refresh(perfil)
+    return perfil
+
+
+@router.post("/impresion/perfil")
+def guardar_perfil_impresion(
+    lote_id: int = Form(...),
+    ancho_pagina_mm: float = Form(...),
+    ancho_etiqueta_mm: float = Form(...),
+    alto_etiqueta_mm: float = Form(...),
+    margen_izquierdo_mm: float = Form(...),
+    margen_derecho_mm: float = Form(...),
+    separacion_central_mm: float = Form(...),
+    avance_adicional_mm: float = Form(...),
+    desplazamiento_x_mm: float = Form(...),
+    desplazamiento_y_mm: float = Form(...),
+    rotacion_contenido: int = Form(...),
+    anio_1: str = Form(...),
+    anio_2: str = Form(...),
+    anio_marcado_posicion: int = Form(...),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    anio_marcado = anio_1 if anio_marcado_posicion == 1 else anio_2
+    if anio_marcado_posicion not in (1, 2):
+        anio_marcado = ""
+    error = _validar_valores_perfil(
+        ancho_pagina_mm=ancho_pagina_mm,
+        ancho_etiqueta_mm=ancho_etiqueta_mm,
+        alto_etiqueta_mm=alto_etiqueta_mm,
+        margen_izquierdo_mm=margen_izquierdo_mm,
+        margen_derecho_mm=margen_derecho_mm,
+        separacion_central_mm=separacion_central_mm,
+        avance_adicional_mm=avance_adicional_mm,
+        desplazamiento_x_mm=desplazamiento_x_mm,
+        desplazamiento_y_mm=desplazamiento_y_mm,
+        rotacion_contenido=rotacion_contenido,
+        anio_1=anio_1,
+        anio_2=anio_2,
+        anio_marcado=anio_marcado,
+    )
+    if error:
+        return RedirectResponse(
+            url=f"/impresion/resultado/{lote_id}?error={quote_plus(error)}",
+            status_code=303,
+        )
+
+    perfil = _obtener_perfil_impresion(db)
+    perfil.ancho_pagina_mm = ancho_pagina_mm
+    perfil.ancho_etiqueta_mm = ancho_etiqueta_mm
+    perfil.alto_etiqueta_mm = alto_etiqueta_mm
+    perfil.margen_izquierdo_mm = margen_izquierdo_mm
+    perfil.margen_derecho_mm = margen_derecho_mm
+    perfil.separacion_central_mm = separacion_central_mm
+    perfil.avance_adicional_mm = avance_adicional_mm
+    perfil.desplazamiento_x_mm = desplazamiento_x_mm
+    perfil.desplazamiento_y_mm = desplazamiento_y_mm
+    perfil.rotacion_contenido = rotacion_contenido
+    perfil.anio_1 = anio_1.strip()
+    perfil.anio_2 = anio_2.strip()
+    perfil.anio_marcado = anio_marcado.strip()
+    db.commit()
+    return RedirectResponse(
+        url=(
+            f"/impresion/resultado/{lote_id}?info="
+            "Perfil+de+impresi%C3%B3n+guardado"
+        ),
+        status_code=303,
+    )
+
+
+def _validar_valores_perfil(**valores) -> str | None:
+    dimensiones_positivas = (
+        "ancho_pagina_mm", "ancho_etiqueta_mm", "alto_etiqueta_mm",
+        "margen_izquierdo_mm", "margen_derecho_mm", "separacion_central_mm",
+    )
+    if any(valores[nombre] <= 0 for nombre in dimensiones_positivas):
+        return "Las dimensiones y los márgenes deben ser mayores que cero."
+    if not 50 <= valores["ancho_pagina_mm"] <= 200:
+        return "El ancho de página debe estar entre 50 y 200 mm."
+    if not 30 <= valores["ancho_etiqueta_mm"] <= 80:
+        return "El ancho de etiqueta debe estar entre 30 y 80 mm."
+    if not 25 <= valores["alto_etiqueta_mm"] <= 60:
+        return "El alto de etiqueta debe estar entre 25 y 60 mm."
+    if not 0 <= valores["avance_adicional_mm"] <= 20:
+        return "El avance adicional debe estar entre 0 y 20 mm."
+    if not -10 <= valores["desplazamiento_x_mm"] <= 10:
+        return "El desplazamiento horizontal debe estar entre -10 y 10 mm."
+    if not -10 <= valores["desplazamiento_y_mm"] <= 10:
+        return "El desplazamiento vertical debe estar entre -10 y 10 mm."
+    if valores["rotacion_contenido"] not in (0, 180):
+        return "La rotación debe ser de 0 o 180 grados."
+
+    ocupado = (
+        valores["margen_izquierdo_mm"]
+        + (2 * valores["ancho_etiqueta_mm"])
+        + valores["separacion_central_mm"]
+        + valores["margen_derecho_mm"]
+    )
+    if ocupado > valores["ancho_pagina_mm"] + 0.01:
+        return "Las dos etiquetas, márgenes y separación exceden el ancho de página."
+
+    anio_1 = valores["anio_1"].strip()
+    anio_2 = valores["anio_2"].strip()
+    anio_marcado = valores["anio_marcado"].strip()
+    if not (anio_1.isdigit() and len(anio_1) == 4):
+        return "El primer año debe tener cuatro dígitos."
+    if not (anio_2.isdigit() and len(anio_2) == 4):
+        return "El segundo año debe tener cuatro dígitos."
+    if anio_marcado not in (anio_1, anio_2):
+        return "El año marcado debe coincidir con uno de los dos años configurados."
+    return None
+
+
+@router.post("/impresion/lote/{lote_id}/pdf")
+def vista_previa_pdf_etiquetas(
+    lote_id: int,
+    alcance: str = Form(...),
+    bien_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_login),
+):
+    consulta = (
+        db.query(BienAlta)
+        .options(
+            joinedload(BienAlta.pecosa),
+            joinedload(BienAlta.centro_costo),
+        )
+        .filter(BienAlta.lote_id == lote_id)
+    )
+    if alcance == "seleccionados":
+        if not bien_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Selecciona al menos un bien para generar el PDF.",
+            )
+        consulta = consulta.filter(BienAlta.id.in_(set(bien_ids)))
+    elif alcance != "todo":
+        raise HTTPException(status_code=400, detail="Alcance de impresión no válido.")
+
+    bienes = consulta.order_by(BienAlta.id).all()
+    imprimibles, _ = clasificar_bienes_impresion(bienes)
+    if not imprimibles:
+        raise HTTPException(
+            status_code=400,
+            detail="No hay bienes con Ruta QR válida en la selección.",
+        )
+
+    perfil = _obtener_perfil_impresion(db)
+    contenido = generar_pdf_etiquetas(imprimibles, perfil)
+    nombre = f"etiquetas_lote_{lote_id}.pdf"
+    return Response(
+        content=contenido,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nombre}"'},
     )
 
 

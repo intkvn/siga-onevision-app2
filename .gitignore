@@ -11,6 +11,8 @@ backups/
 .venv/
 __pycache__/
 *.py[cod]
+tmp/
+output/
 
 # Archivos del sistema operativo.
 .DS_Store

@@ -1,57 +1,253 @@
 {% extends "base.html" %}
 {% block titulo %}Resultado de impresión{% endblock %}
 {% block contenido %}
-<h3 class="mb-3">Resultado — Lote #{{ lote_id }}</h3>
+<h3 class="mb-3">Resultado - Lote #{{ lote_id }}</h3>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+{% if request.query_params.get("info") %}
+<div class="alert alert-success">{{ request.query_params.get("info") }}</div>
+{% endif %}
 
 {% if no_encontrados %}
 <div class="alert alert-warning">
-    ⚠️ {{ no_encontrados|length }} bien(es) de este lote <strong>no aparecieron</strong> en el reporte de
-    One Visión que subiste. Puede ser que todavía no los hayas cargado a One Visión, o que el reporte
-    que subiste sea de otra fecha/lote. Revisa la lista de abajo.
+    {{ no_encontrados|length }} bien(es) del lote no aparecieron en el reporte de One Visión cargado.
+    Estos bienes no se incluirán en los archivos de impresión.
 </div>
 {% else %}
 <div class="alert alert-success">
-    ✅ Todos los bienes de este lote se encontraron en el reporte — ya puedes descargar el archivo.
+    Todos los bienes del lote se encontraron en el reporte de One Visión.
 </div>
 {% endif %}
 
-<a href="/impresion/lote/{{ lote_id }}/descargar" class="btn btn-success mb-4">
-    Descargar archivo para BarTender ({{ encontrados|length }} bien(es))
-</a>
-
-<div class="row">
-    <div class="col-md-6">
-        <h5>✅ Encontrados ({{ encontrados|length }})</h5>
-        <table class="table table-sm bg-white">
-            <thead><tr><th>Cód. Patrimonial</th><th>Pecosa</th><th>Descripción</th></tr></thead>
-            <tbody>
-            {% for b in encontrados %}
-                <tr>
-                    <td>{{ b.codigo_patrimonial }}</td>
-                    <td>{{ b.pecosa.numero if b.pecosa else "-" }}</td>
-                    <td>{{ b.descripcion }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <div class="col-md-6">
-        <h5>⚠️ No encontrados ({{ no_encontrados|length }})</h5>
-        <table class="table table-sm bg-white">
-            <thead><tr><th>Cód. Patrimonial</th><th>Pecosa</th><th>Descripción</th></tr></thead>
-            <tbody>
-            {% for b in no_encontrados %}
-                <tr class="table-warning">
-                    <td>{{ b.codigo_patrimonial }}</td>
-                    <td>{{ b.pecosa.numero if b.pecosa else "-" }}</td>
-                    <td>{{ b.descripcion }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <a href="/impresion/lote/{{ lote_id }}/descargar" class="btn btn-success">
+        Descargar Excel para BarTender ({{ encontrados|length }} bien(es))
+    </a>
+    <a href="/impresion" class="btn btn-outline-secondary">Volver a Impresión QR</a>
 </div>
 
-<p class="text-muted">Puedes volver a <a href="/impresion">Impresión QR</a> y subir otro reporte de One Visión
-para este mismo lote — se irán completando los que falten sin duplicar los que ya tienen QR.</p>
+<section class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+            <div>
+                <h4 class="card-title mb-1">Impresión directa en PDF</h4>
+                <p class="text-muted mb-0">
+                    {{ imprimibles|length }} bien(es) imprimible(s). Cada página contiene dos etiquetas.
+                    La segunda posición queda vacía cuando la cantidad es impar.
+                </p>
+            </div>
+            <span class="badge text-bg-secondary fs-6">{{ perfil.nombre }}</span>
+        </div>
+
+        <div class="row g-2 small mb-3">
+            <div class="col-md-3"><strong>Material físico:</strong> {{ "%.1f"|format(perfil.ancho_pagina_mm) }} × {{ "%.1f"|format(perfil.alto_etiqueta_mm) }} mm</div>
+            <div class="col-md-3"><strong>PDF para Argox:</strong> {{ "%.1f"|format(ancho_pagina_pdf) }} × {{ "%.1f"|format(alto_pagina_pdf) }} mm</div>
+            <div class="col-md-3"><strong>Etiqueta:</strong> {{ "%.1f"|format(perfil.ancho_etiqueta_mm) }} × {{ "%.1f"|format(perfil.alto_etiqueta_mm) }} mm</div>
+            <div class="col-md-3"><strong>Giro del contenido:</strong> {{ perfil.rotacion_contenido }}°</div>
+        </div>
+
+        <details class="border rounded p-3 mb-4">
+            <summary class="fw-semibold">Configurar perfil de impresión</summary>
+            <form method="post" action="/impresion/perfil" class="mt-3">
+                <input type="hidden" name="lote_id" value="{{ lote_id }}">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Ancho página (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="ancho_pagina_mm" value="{{ perfil.ancho_pagina_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Ancho etiqueta (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="ancho_etiqueta_mm" value="{{ perfil.ancho_etiqueta_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Alto etiqueta (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="alto_etiqueta_mm" value="{{ perfil.alto_etiqueta_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Separación central (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="separacion_central_mm" value="{{ perfil.separacion_central_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Margen izquierdo (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="margen_izquierdo_mm" value="{{ perfil.margen_izquierdo_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Margen derecho (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="margen_derecho_mm" value="{{ perfil.margen_derecho_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Avance adicional (mm)</label>
+                        <input class="form-control" type="number" step="0.1" min="0" name="avance_adicional_mm" value="{{ perfil.avance_adicional_mm }}" required>
+                        <div class="form-text">Mantener en 0 hasta probar el controlador.</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Rotación</label>
+                        <select class="form-select" name="rotacion_contenido">
+                            <option value="0" {% if perfil.rotacion_contenido == 0 %}selected{% endif %}>0°</option>
+                            <option value="180" {% if perfil.rotacion_contenido == 180 %}selected{% endif %}>180°</option>
+                        </select>
+                        <div class="form-text">180° coincide con la orientación de la plantilla BarTender.</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Ajuste horizontal (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="desplazamiento_x_mm" value="{{ perfil.desplazamiento_x_mm }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Ajuste vertical (mm)</label>
+                        <input class="form-control" type="number" step="0.1" name="desplazamiento_y_mm" value="{{ perfil.desplazamiento_y_mm }}" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Año 1</label>
+                        <input class="form-control" type="text" inputmode="numeric" maxlength="4" name="anio_1" value="{{ perfil.anio_1 }}" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Año 2</label>
+                        <input class="form-control" type="text" inputmode="numeric" maxlength="4" name="anio_2" value="{{ perfil.anio_2 }}" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Año marcado</label>
+                        <select class="form-select" name="anio_marcado_posicion">
+                            <option value="1" {% if perfil.anio_marcado == perfil.anio_1 %}selected{% endif %}>Primer año</option>
+                            <option value="2" {% if perfil.anio_marcado == perfil.anio_2 %}selected{% endif %}>Segundo año</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-outline-primary mt-3" type="submit">Guardar perfil</button>
+            </form>
+        </details>
+
+        {% if imprimibles %}
+        <form id="form-etiquetas-pdf" method="post" action="/impresion/lote/{{ lote_id }}/pdf" target="_blank">
+            <div class="row g-2 align-items-center mb-3">
+                <div class="col-md-6">
+                    <input id="buscar-bien-pdf" class="form-control" type="search" placeholder="Buscar por código QR o código patrimonial">
+                </div>
+                <div class="col-auto">
+                    <button id="seleccionar-visibles-pdf" class="btn btn-outline-primary" type="button">Seleccionar visibles</button>
+                </div>
+                <div class="col-auto">
+                    <button id="limpiar-seleccion-pdf" class="btn btn-outline-secondary" type="button">Quitar selección</button>
+                </div>
+                <div class="col-auto">
+                    <span id="contador-seleccion-pdf" class="fw-semibold"></span>
+                </div>
+            </div>
+
+            <div class="table-responsive mb-3" style="max-height: 420px;">
+                <table class="table table-sm table-hover align-middle bg-white">
+                    <thead class="sticky-top bg-white">
+                        <tr>
+                            <th style="width: 42px;"><span class="visually-hidden">Seleccionar</span></th>
+                            <th>Código QR</th>
+                            <th>Código patrimonial</th>
+                            <th>Pecosa</th>
+                            <th>Bien</th>
+                            <th>Establecimiento</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for b in imprimibles %}
+                        <tr class="fila-bien-pdf" data-busqueda="{{ (b.codigo_qr ~ ' ' ~ b.codigo_patrimonial)|lower }}">
+                            <td><input class="form-check-input seleccion-bien-pdf" type="checkbox" name="bien_ids" value="{{ b.id }}" checked></td>
+                            <td>{{ b.codigo_qr }}</td>
+                            <td>{{ b.codigo_patrimonial }}</td>
+                            <td>{{ b.pecosa.numero if b.pecosa else "-" }}</td>
+                            <td>{{ b.descripcion }}</td>
+                            <td>{{ b.centro_costo.nombre_depend if b.centro_costo else "-" }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" type="submit" name="alcance" value="seleccionados">
+                    Vista previa de seleccionados
+                </button>
+                <button class="btn btn-outline-primary" type="submit" name="alcance" value="todo">
+                    Vista previa de todo el lote
+                </button>
+            </div>
+            <p class="form-text mt-2 mb-0">
+                El PDF se abre en otra pestaña. Imprime con escala 100 %, sin ajustar al papel,
+                una página por hoja y tamaño USER 105,1 × 38,1 mm.
+                Generar el PDF no registra los bienes como impresos.
+            </p>
+        </form>
+        {% else %}
+        <div class="alert alert-secondary mb-0">No hay bienes imprimibles en este lote.</div>
+        {% endif %}
+    </div>
+</section>
+
+{% if excluidos_pdf %}
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Excluidos del PDF ({{ excluidos_pdf|length }})</h5>
+        <p class="text-muted">Estos bienes no se enviarán al generador hasta corregir el motivo indicado.</p>
+        <div class="table-responsive">
+            <table class="table table-sm bg-white mb-0">
+                <thead><tr><th>Código patrimonial</th><th>Código QR</th><th>Pecosa</th><th>Motivo</th></tr></thead>
+                <tbody>
+                {% for item in excluidos_pdf %}
+                    <tr class="table-warning">
+                        <td>{{ item.bien.codigo_patrimonial }}</td>
+                        <td>{{ item.bien.codigo_qr or "-" }}</td>
+                        <td>{{ item.bien.pecosa.numero if item.bien.pecosa else "-" }}</td>
+                        <td>{{ item.razon }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<p class="text-muted">
+    Puedes volver a <a href="/impresion">Impresión QR</a> y subir otro reporte de One Visión para este
+    mismo lote. Se completarán los bienes faltantes sin duplicar los que ya tienen QR.
+</p>
+
+<script>
+(function () {
+    const buscador = document.getElementById("buscar-bien-pdf");
+    if (!buscador) return;
+
+    const filas = Array.from(document.querySelectorAll(".fila-bien-pdf"));
+    const checks = Array.from(document.querySelectorAll(".seleccion-bien-pdf"));
+    const contador = document.getElementById("contador-seleccion-pdf");
+
+    function actualizarContador() {
+        const cantidad = checks.filter((check) => check.checked).length;
+        contador.textContent = cantidad + " seleccionado(s)";
+    }
+
+    buscador.addEventListener("input", function () {
+        const termino = this.value.trim().toLowerCase();
+        filas.forEach((fila) => {
+            fila.classList.toggle("d-none", !fila.dataset.busqueda.includes(termino));
+        });
+    });
+
+    document.getElementById("seleccionar-visibles-pdf").addEventListener("click", function () {
+        filas.forEach((fila) => {
+            if (!fila.classList.contains("d-none")) {
+                fila.querySelector(".seleccion-bien-pdf").checked = true;
+            }
+        });
+        actualizarContador();
+    });
+
+    document.getElementById("limpiar-seleccion-pdf").addEventListener("click", function () {
+        checks.forEach((check) => { check.checked = false; });
+        actualizarContador();
+    });
+
+    checks.forEach((check) => check.addEventListener("change", actualizarContador));
+    actualizarContador();
+})();
+</script>
 {% endblock %}

@@ -1,5 +1,6 @@
 import os
 import inspect
+import re
 import tempfile
 import unittest
 from datetime import date
@@ -10,6 +11,7 @@ import xlrd
 import xlwt
 import pandas as pd
 from openpyxl import Workbook as OpenpyxlWorkbook
+from reportlab.lib.units import mm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -17,7 +19,7 @@ from app.database import Base, _opciones_engine
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
     LoteCarga, Persona, RelacionPecosaItem, VerificacionPecosaSiga,
-    ObservacionControlPecosa,
+    ObservacionControlPecosa, PerfilImpresionEtiqueta,
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import (
@@ -30,7 +32,7 @@ from app.routers.normalizacion import (
     _pecosas_no_encontradas,
     _regularizar_bienes_historicos, _resumen_lote,
 )
-from app.routers.impresion import procesar_reporte_qr
+from app.routers.impresion import _validar_valores_perfil, procesar_reporte_qr
 from app.routers.pecosas import registrar_pecosas_multiples
 from app.services.excel_relacion_pecosas import COLUMNAS_NECESARIAS, leer_relacion_pecosas
 from app.services.excel_onevision import (
@@ -39,6 +41,10 @@ from app.services.excel_onevision import (
 from app.services.excel_verificacion import leer_reporte_verificacion
 from app.services.lote_status import expedientes_de_lotes
 from app.services.pagination import paginas_visibles, rango_registros
+from app.services.pdf_etiquetas import (
+    _ajustar_bloques_inferiores, clasificar_bienes_impresion, generar_pdf_etiquetas,
+    numero_paginas_para_bienes,
+)
 from app.routers.verificacion import (
     ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
 )
@@ -139,6 +145,140 @@ class LecturaReporteQrTest(unittest.TestCase):
 
     def test_el_cruce_no_bloquea_el_event_loop(self):
         self.assertFalse(inspect.iscoroutinefunction(procesar_reporte_qr))
+
+
+class PdfEtiquetasTest(unittest.TestCase):
+    def setUp(self):
+        self.perfil = PerfilImpresionEtiqueta(
+            nombre="Argox iX4-250 203 dpi",
+            ancho_pagina_mm=105.1,
+            ancho_etiqueta_mm=50.8,
+            alto_etiqueta_mm=38.1,
+            margen_izquierdo_mm=0.75,
+            margen_derecho_mm=0.75,
+            separacion_central_mm=2.0,
+            avance_adicional_mm=0.0,
+            desplazamiento_x_mm=0.0,
+            desplazamiento_y_mm=0.0,
+            rotacion_contenido=180,
+            anio_1="2026",
+            anio_2="2027",
+            anio_marcado="2026",
+        )
+
+    def _bien(self, indice=1, ruta=None):
+        return SimpleNamespace(
+            id=indice,
+            codigo_qr=f"69735{indice}",
+            codigo_patrimonial=f"74648187373{indice}",
+            ruta_qr=ruta or f"https://sir.example/qr/equipo/69735{indice}",
+            descripcion="UNIDAD CENTRAL DE PROCESO CON MEMORIA Y ALMACENAMIENTO",
+            centro_costo=SimpleNamespace(
+                nombre_depend="LABORATORIO DE REFERENCIA REGIONAL DE SALUD PUBLICA"
+            ),
+        )
+
+    def test_genera_una_pagina_por_cada_pareja(self):
+        contenido = generar_pdf_etiquetas(
+            [self._bien(1), self._bien(2), self._bien(3)], self.perfil,
+        )
+
+        self.assertTrue(contenido.startswith(b"%PDF-"))
+        paginas = re.findall(rb"/Type\s*/Page\b", contenido)
+        self.assertEqual(len(paginas), 2)
+        self.assertEqual(numero_paginas_para_bienes(3), 2)
+        caja = re.search(
+            rb"/MediaBox\s*\[\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*\]",
+            contenido,
+        )
+        self.assertIsNotNone(caja)
+        ancho_mm = float(caja.group(1)) * 25.4 / 72
+        alto_mm = float(caja.group(2)) * 25.4 / 72
+        self.assertAlmostEqual(ancho_mm, 38.1, places=2)
+        self.assertAlmostEqual(alto_mm, 105.1, places=2)
+        self.assertRegex(contenido, rb"/Rotate\s+90\b")
+
+    def test_entrega_al_qr_la_ruta_original_sin_modificar(self):
+        ruta = "https://sir.example/QR/Equipo/697351?origen=OneVision"
+        with patch("app.services.pdf_etiquetas._dibujar_qr") as dibujar_qr:
+            generar_pdf_etiquetas([self._bien(1, ruta=ruta)], self.perfil)
+
+        self.assertEqual(dibujar_qr.call_args.args[1], ruta)
+
+    def test_qr_usa_el_tamano_ampliado(self):
+        with patch("app.services.pdf_etiquetas._dibujar_qr") as dibujar_qr:
+            generar_pdf_etiquetas([self._bien(1)], self.perfil)
+
+        tamano_qr = dibujar_qr.call_args.args[4]
+        self.assertAlmostEqual(tamano_qr / mm, 27.0, places=2)
+
+    def test_descripcion_y_establecimiento_comparten_espacio_sin_solaparse(self):
+        alto_disponible = 29.0
+        ajuste = _ajustar_bloques_inferiores(
+            "UNIDAD CENTRAL DE PROCESO CON MEMORIA Y ALMACENAMIENTO",
+            "LABORATORIO DE REFERENCIA REGIONAL DE SALUD PUBLICA",
+            35.1 * mm,
+            alto_disponible,
+        )
+
+        self.assertIsNotNone(ajuste)
+        descripcion, establecimiento, separacion = ajuste
+        alto_usado = (
+            len(descripcion[0]) * descripcion[2]
+            + separacion
+            + len(establecimiento[0]) * establecimiento[2]
+        )
+        self.assertLessEqual(alto_usado, alto_disponible)
+        self.assertGreaterEqual(len(descripcion[0]), 2)
+        self.assertGreaterEqual(len(establecimiento[0]), 2)
+
+    def test_dibuja_las_dos_posiciones_de_la_pagina(self):
+        with patch(
+            "app.services.pdf_etiquetas._dibujar_etiqueta_logica"
+        ) as dibujar:
+            generar_pdf_etiquetas(
+                [self._bien(1), self._bien(2)], self.perfil,
+            )
+
+        self.assertEqual(dibujar.call_count, 2)
+        posiciones_y = [llamada.args[3] for llamada in dibujar.call_args_list]
+        self.assertEqual(posiciones_y, [0.75, 53.55])
+
+    def test_excluye_rutas_vacias_o_con_espacios_exteriores(self):
+        bienes = [
+            self._bien(1),
+            self._bien(2, ruta=""),
+            self._bien(3, ruta=" https://sir.example/qr/3 "),
+        ]
+        bienes[1].ruta_qr = ""
+
+        imprimibles, excluidos = clasificar_bienes_impresion(bienes)
+
+        self.assertEqual([bien.id for bien in imprimibles], [1])
+        self.assertEqual(len(excluidos), 2)
+        self.assertEqual(excluidos[0]["razon"], "Sin Ruta QR")
+        self.assertIn("espacios", excluidos[1]["razon"])
+
+    def test_valida_geometria_y_anios_del_perfil(self):
+        valores = {
+            "ancho_pagina_mm": 105.1,
+            "ancho_etiqueta_mm": 50.8,
+            "alto_etiqueta_mm": 38.1,
+            "margen_izquierdo_mm": 0.75,
+            "margen_derecho_mm": 0.75,
+            "separacion_central_mm": 2.0,
+            "avance_adicional_mm": 0.0,
+            "desplazamiento_x_mm": 0.0,
+            "desplazamiento_y_mm": 0.0,
+            "rotacion_contenido": 180,
+            "anio_1": "2026",
+            "anio_2": "2027",
+            "anio_marcado": "2026",
+        }
+        self.assertIsNone(_validar_valores_perfil(**valores))
+
+        valores["separacion_central_mm"] = 3.0
+        self.assertIn("exceden", _validar_valores_perfil(**valores))
 
 
 class IndicadoresCruceLoteTest(unittest.TestCase):

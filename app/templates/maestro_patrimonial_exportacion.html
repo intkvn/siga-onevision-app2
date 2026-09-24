@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block titulo %}Exportación patrimonial #{{ exportacion.id }}{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Exportación patrimonial #{{ exportacion.id }}</h2>
+        <p class="text-muted mb-0">{{ exportacion.tipo_reporte }} · {{ exportacion.creado_en.strftime("%d/%m/%Y %H:%M") }}</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Volver</a>
+</div>
+
+{% if exportacion.estado in ["Pendiente", "Procesando"] %}
+<div class="card card-body" id="exportacion-en-proceso">
+    <h5>Generando archivo</h5>
+    <p class="text-muted">Puedes salir de esta página. El archivo seguirá procesándose y quedará disponible en el historial.</p>
+    <div class="progress" role="progressbar" aria-label="Avance de exportación">
+        <div class="progress-bar" id="barra-exportacion" style="width: {{ exportacion.progreso }}%">{{ exportacion.progreso }}%</div>
+    </div>
+</div>
+{% elif exportacion.estado == "Completada" %}
+<div class="alert alert-success">El archivo está listo. Contiene {{ exportacion.total_filas }} bienes.</div>
+<a class="btn btn-success" href="/maestro-patrimonial/exportaciones/{{ exportacion.id }}/descargar">Descargar {{ exportacion.nombre_archivo }}</a>
+{% else %}
+<div class="alert alert-danger">{{ exportacion.mensaje_error or "No se pudo generar el archivo." }}</div>
+{% endif %}
+
+{% if exportacion.estado in ["Pendiente", "Procesando"] %}
+<script>
+setTimeout(function consultar() {
+    fetch("/maestro-patrimonial/exportaciones/{{ exportacion.id }}/estado")
+        .then(r => r.json()).then(data => {
+            if (["Pendiente", "Procesando"].includes(data.estado)) {
+                const barra = document.getElementById("barra-exportacion");
+                barra.style.width = `${data.progreso || 0}%`;
+                barra.textContent = `${data.progreso || 0}%`;
+                setTimeout(consultar, 1500);
+            } else window.location.reload();
+        }).catch(() => setTimeout(consultar, 3000));
+}, 1200);
+</script>
+{% endif %}
+{% endblock %}

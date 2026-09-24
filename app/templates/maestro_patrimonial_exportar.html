@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block titulo %}Exportar Maestro Patrimonial{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Exportar Maestro Patrimonial</h2>
+        <p class="text-muted mb-0">Se exportarán {{ total }} bienes según los filtros aplicados.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Volver</a>
+</div>
+
+<form method="post" action="/maestro-patrimonial/exportaciones" class="card card-body">
+    <input type="hidden" name="filtros" value='{{ filtros_json }}'>
+    <div class="mb-3">
+        <label class="form-label">Tipo de archivo</label>
+        <select class="form-select" name="tipo_reporte" id="tipo-reporte">
+            <option value="Resumen personalizado">Resumen personalizado</option>
+            <option value="SIGA completo">SIGA completo</option>
+        </select>
+        <div class="form-text">SIGA completo conserva las 41 columnas y su orden original. El resumen permite elegir columnas.</div>
+    </div>
+
+    <fieldset id="columnas-resumen">
+        <legend class="h5">Columnas del resumen</legend>
+        <div class="row g-2">
+            {% for campo, etiqueta in campos %}
+            <div class="col-md-4">
+                <label class="form-check border rounded p-2 w-100">
+                    <input class="form-check-input ms-0 me-2" type="checkbox" name="columnas" value="{{ campo }}" {% if campo in predeterminados %}checked{% endif %}>
+                    <span class="form-check-label">{{ etiqueta }}</span>
+                </label>
+            </div>
+            {% endfor %}
+        </div>
+    </fieldset>
+
+    <div class="mt-4">
+        <button class="btn btn-success" type="submit">Generar Excel en segundo plano</button>
+    </div>
+</form>
+
+<script>
+(function () {
+    const tipo = document.getElementById("tipo-reporte");
+    const columnas = document.getElementById("columnas-resumen");
+    function actualizar() {
+        columnas.classList.toggle("d-none", tipo.value === "SIGA completo");
+    }
+    tipo.addEventListener("change", actualizar);
+    actualizar();
+})();
+</script>
+{% endblock %}

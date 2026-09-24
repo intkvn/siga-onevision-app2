@@ -9,7 +9,7 @@ LoteCarga agrupa un envío de normalización/carga a One Visión.
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Date, DateTime, Float, ForeignKey, Index, Text,
-    UniqueConstraint,
+    UniqueConstraint, Numeric, LargeBinary,
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -339,3 +339,226 @@ class CorreccionAsignacionBien(Base):
     bien = relationship("BienAlta")
     pecosa_origen = relationship("Pecosa", foreign_keys=[pecosa_origen_id])
     pecosa_destino = relationship("Pecosa", foreign_keys=[pecosa_destino_id])
+
+
+class CargaPatrimonial(Base):
+    """Carga validada del reporte Maestro Patrimonial emitido por SIGA."""
+    __tablename__ = "cargas_patrimoniales"
+
+    id = Column(Integer, primary_key=True)
+    nombre_archivo = Column(String(300), nullable=False)
+    huella_archivo = Column(String(64), nullable=False, index=True)
+    usuario_carga = Column(String(100), nullable=False)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    confirmado_en = Column(DateTime, nullable=True)
+    estado = Column(String(30), nullable=False, default="Validando", index=True)
+    tipo_carga = Column(String(20), nullable=False, default="Completa", index=True)
+    progreso = Column(Integer, nullable=False, default=0)
+    mensaje_progreso = Column(String(300), nullable=True)
+    archivo_contenido = Column(LargeBinary, nullable=True)
+    total_filas = Column(Integer, nullable=False, default=0)
+    filas_validas = Column(Integer, nullable=False, default=0)
+    total_errores = Column(Integer, nullable=False, default=0)
+    total_alertas = Column(Integer, nullable=False, default=0)
+    total_nuevos = Column(Integer, nullable=False, default=0)
+    total_actualizados = Column(Integer, nullable=False, default=0)
+    total_sin_cambios = Column(Integer, nullable=False, default=0)
+    total_no_incluidos = Column(Integer, nullable=False, default=0)
+    detalle_validacion = Column(Text, nullable=True)
+    detalle_alertas = Column(Text, nullable=True)
+
+    filas = relationship(
+        "BienCargaPatrimonial", back_populates="carga",
+        cascade="all, delete-orphan",
+    )
+    versiones = relationship("VersionBienPatrimonial", back_populates="carga")
+
+
+class ExportacionPatrimonial(Base):
+    """Excel solicitado en segundo plano y disponible para descarga posterior."""
+    __tablename__ = "exportaciones_patrimoniales"
+
+    id = Column(Integer, primary_key=True)
+    usuario = Column(String(100), nullable=False)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completado_en = Column(DateTime, nullable=True)
+    estado = Column(String(30), nullable=False, default="Pendiente", index=True)
+    progreso = Column(Integer, nullable=False, default=0)
+    tipo_reporte = Column(String(30), nullable=False)
+    columnas = Column(Text, nullable=False)
+    filtros = Column(Text, nullable=False)
+    total_filas = Column(Integer, nullable=False, default=0)
+    nombre_archivo = Column(String(300), nullable=True)
+    archivo_contenido = Column(LargeBinary, nullable=True)
+    mensaje_error = Column(String(500), nullable=True)
+
+
+class BienPatrimonial(Base):
+    """Información vigente y última fuente SIGA de un bien patrimonial."""
+    __tablename__ = "bienes_patrimoniales"
+    __table_args__ = (
+        Index("ix_bien_mp_dependencia", "nombre_dependencia"),
+        Index("ix_bien_mp_usuario", "usuario"),
+        Index("ix_bien_mp_ubicacion", "ubicacion_fisica"),
+        Index("ix_bien_mp_descripcion", "descripcion"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    codigo_patrimonial = Column(String(50), unique=True, nullable=False, index=True)
+    codigo_qr = Column(String(80), nullable=True, index=True)
+    descripcion = Column(String(500), nullable=False)
+    nombre_dependencia = Column(String(350), nullable=False)
+    usuario = Column(String(300), nullable=False)
+    fecha_compra = Column(Date, nullable=True)
+    valor_compra = Column(Numeric(18, 4), nullable=False)
+    fecha_alta = Column(Date, nullable=True)
+    valor_inicial = Column(Numeric(18, 4), nullable=False)
+    ubicacion_fisica = Column(String(350), nullable=False)
+    modelo = Column(String(250), nullable=True)
+    numero_orden = Column(String(100), nullable=True)
+    medidas = Column(String(300), nullable=True)
+    valor_neto = Column(Numeric(18, 4), nullable=False)
+    numero_documento = Column(String(150), nullable=True)
+    marca = Column(String(250), nullable=False)
+    estado_conservacion = Column(String(100), nullable=False)
+    fecha_nea = Column(Date, nullable=True)
+    numero_serie = Column(String(250), nullable=True)
+    color = Column(String(150), nullable=True)
+    caracteristicas = Column(Text, nullable=True)
+    observaciones = Column(Text, nullable=True)
+    datos_importados = Column(Text, nullable=False)
+    datos_fuente = Column(Text, nullable=False)
+    ultima_carga_id = Column(
+        Integer, ForeignKey("cargas_patrimoniales.id"), nullable=False, index=True,
+    )
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    actualizado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    ultima_carga = relationship("CargaPatrimonial", foreign_keys=[ultima_carga_id])
+    cargas = relationship("BienCargaPatrimonial", back_populates="bien")
+    versiones = relationship(
+        "VersionBienPatrimonial", back_populates="bien",
+        cascade="all, delete-orphan",
+    )
+    correcciones = relationship(
+        "CorreccionBienPatrimonial", back_populates="bien",
+        cascade="all, delete-orphan",
+    )
+    conflictos = relationship(
+        "ConflictoBienPatrimonial", back_populates="bien",
+        cascade="all, delete-orphan",
+    )
+
+
+class BienCargaPatrimonial(Base):
+    """Fila del Excel y clasificación obtenida dentro de una carga."""
+    __tablename__ = "bienes_carga_patrimonial"
+    __table_args__ = (
+        UniqueConstraint("carga_id", "codigo_patrimonial", name="uq_carga_mp_codigo"),
+        Index("ix_carga_mp_clasificacion", "carga_id", "clasificacion"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    carga_id = Column(
+        Integer, ForeignKey("cargas_patrimoniales.id"), nullable=False, index=True,
+    )
+    bien_id = Column(Integer, ForeignKey("bienes_patrimoniales.id"), nullable=True, index=True)
+    numero_fila = Column(Integer, nullable=True)
+    codigo_patrimonial = Column(String(50), nullable=False, index=True)
+    clasificacion = Column(String(30), nullable=False, index=True)
+    datos_comparables = Column(Text, nullable=True)
+    datos_fuente = Column(Text, nullable=True)
+
+    carga = relationship("CargaPatrimonial", back_populates="filas")
+    bien = relationship("BienPatrimonial", back_populates="cargas")
+
+
+class VersionBienPatrimonial(Base):
+    """Instantánea del bien creada por una carga o una edición manual."""
+    __tablename__ = "versiones_bienes_patrimoniales"
+
+    id = Column(Integer, primary_key=True)
+    bien_id = Column(
+        Integer, ForeignKey("bienes_patrimoniales.id"), nullable=False, index=True,
+    )
+    carga_id = Column(Integer, ForeignKey("cargas_patrimoniales.id"), nullable=True, index=True)
+    origen = Column(String(30), nullable=False)
+    usuario = Column(String(100), nullable=False)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    snapshot = Column(Text, nullable=False)
+
+    bien = relationship("BienPatrimonial", back_populates="versiones")
+    carga = relationship("CargaPatrimonial", back_populates="versiones")
+    cambios = relationship(
+        "CambioBienPatrimonial", back_populates="version",
+        cascade="all, delete-orphan",
+    )
+
+
+class CambioBienPatrimonial(Base):
+    """Diferencia de un campo dentro de una versión."""
+    __tablename__ = "cambios_bienes_patrimoniales"
+
+    id = Column(Integer, primary_key=True)
+    version_id = Column(
+        Integer, ForeignKey("versiones_bienes_patrimoniales.id"),
+        nullable=False, index=True,
+    )
+    campo = Column(String(80), nullable=False)
+    valor_anterior = Column(Text, nullable=True)
+    valor_nuevo = Column(Text, nullable=True)
+
+    version = relationship("VersionBienPatrimonial", back_populates="cambios")
+
+
+class CorreccionBienPatrimonial(Base):
+    """Valor manual vigente o histórico aplicado sobre un campo importado."""
+    __tablename__ = "correcciones_bienes_patrimoniales"
+    __table_args__ = (
+        Index("ix_correccion_mp_activa", "bien_id", "campo", "activa"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    bien_id = Column(
+        Integer, ForeignKey("bienes_patrimoniales.id"), nullable=False, index=True,
+    )
+    campo = Column(String(80), nullable=False)
+    valor_anterior = Column(Text, nullable=True)
+    valor_nuevo = Column(Text, nullable=True)
+    motivo = Column(String(500), nullable=False)
+    usuario = Column(String(100), nullable=False)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    activa = Column(Integer, nullable=False, default=1, index=True)
+    cerrada_en = Column(DateTime, nullable=True)
+
+    bien = relationship("BienPatrimonial", back_populates="correcciones")
+
+
+class ConflictoBienPatrimonial(Base):
+    """Cambio SIGA que contradice una corrección manual activa."""
+    __tablename__ = "conflictos_bienes_patrimoniales"
+    __table_args__ = (
+        Index("ix_conflicto_mp_pendiente", "bien_id", "estado"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    bien_id = Column(
+        Integer, ForeignKey("bienes_patrimoniales.id"), nullable=False, index=True,
+    )
+    carga_id = Column(
+        Integer, ForeignKey("cargas_patrimoniales.id"), nullable=False, index=True,
+    )
+    correccion_id = Column(
+        Integer, ForeignKey("correcciones_bienes_patrimoniales.id"), nullable=False,
+    )
+    campo = Column(String(80), nullable=False)
+    valor_siga_anterior = Column(Text, nullable=True)
+    valor_siga_nuevo = Column(Text, nullable=True)
+    valor_manual = Column(Text, nullable=True)
+    estado = Column(String(30), nullable=False, default="Pendiente", index=True)
+    resuelto_por = Column(String(100), nullable=True)
+    resuelto_en = Column(DateTime, nullable=True)
+
+    bien = relationship("BienPatrimonial", back_populates="conflictos")
+    carga = relationship("CargaPatrimonial")
+    correccion = relationship("CorreccionBienPatrimonial")

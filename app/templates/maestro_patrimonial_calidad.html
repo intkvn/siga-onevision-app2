@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block titulo %}Calidad del Maestro Patrimonial{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Calidad de datos</h2>
+        <p class="text-muted mb-0">Revisión del Maestro Patrimonial y sus relaciones con Altas y Control Impresión.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Volver</a>
+</div>
+
+<div class="row g-3 mb-4">
+    {% for titulo, valor, estilo in [
+        ("Bienes", total_bienes, "dark"),
+        ("Sin QR", sin_qr_total, "warning"),
+        ("QR repetidos en Maestro", duplicados_total, "danger"),
+        ("Diferencias entre módulos", discrepancias_total, "warning"),
+        ("QR asociados a varios bienes", qr_otros_codigos_total, "danger")
+    ] %}
+    <div class="col-6 col-lg"><div class="card h-100 border-{{ estilo }}"><div class="card-body text-center"><div class="h2">{{ valor }}</div><div class="text-muted">{{ titulo }}</div></div></div></div>
+    {% endfor %}
+</div>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Campos opcionales pendientes</h5>
+        <div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Campo</th><th>Sin dato</th></tr></thead><tbody>
+        {% for item in opcionales %}<tr><td>{{ item.etiqueta }}</td><td>{{ item.cantidad }}</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+</section>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Diferencias de QR entre módulos ({{ discrepancias_total }})</h5>
+        <div class="table-responsive" style="max-height:500px"><table class="table table-sm table-hover"><thead><tr><th>Código patrimonial</th><th>Valores registrados</th><th></th></tr></thead><tbody>
+        {% for item in discrepancias %}
+        <tr><td>{{ item.codigo }}</td><td>{% for origen in item.origenes %}<div><strong>{{ origen.origen }}:</strong> {{ origen.qr }}</div>{% endfor %}</td><td>{% if item.bien_id %}<a class="btn btn-sm btn-outline-primary" href="/maestro-patrimonial/bienes/{{ item.bien_id }}">Ver bien</a>{% endif %}</td></tr>
+        {% else %}<tr><td colspan="3" class="text-center text-muted">No se encontraron diferencias.</td></tr>{% endfor %}
+        </tbody></table></div>
+        {% if discrepancias_total > discrepancias|length %}<p class="text-muted small mb-0">Se muestran los primeros {{ discrepancias|length }} casos.</p>{% endif %}
+    </div>
+</section>
+
+<div class="row g-4">
+    <div class="col-lg-6">
+        <section class="card h-100"><div class="card-body">
+            <h5 class="card-title">Bienes sin QR ({{ sin_qr_total }})</h5>
+            <div style="max-height:400px;overflow:auto">{% for item in sin_qr %}<div class="border-bottom py-2"><a href="/maestro-patrimonial/bienes/{{ item.bien_id }}">{{ item.codigo }}</a></div>{% else %}<p class="text-muted">Todos los bienes tienen QR.</p>{% endfor %}</div>
+            {% if sin_qr_total > sin_qr|length %}<p class="text-muted small mb-0 mt-2">Se muestran los primeros {{ sin_qr|length }} bienes.</p>{% endif %}
+        </div></section>
+    </div>
+    <div class="col-lg-6">
+        <section class="card h-100"><div class="card-body">
+            <h5 class="card-title">QR repetidos en Maestro ({{ duplicados_total }})</h5>
+            <div style="max-height:400px;overflow:auto">{% for item in duplicados %}<div class="border-bottom py-2"><strong>{{ item.qr }}</strong>: {% for bien in item.bienes %}<a href="/maestro-patrimonial/bienes/{{ bien.bien_id }}">{{ bien.codigo }}</a>{{ ", " if not loop.last else "" }}{% endfor %}</div>{% else %}<p class="text-muted">No hay QR repetidos dentro del Maestro.</p>{% endfor %}</div>
+        </div></section>
+    </div>
+</div>
+
+{% if qr_otros_codigos %}
+<section class="card mt-4"><div class="card-body">
+    <h5 class="card-title">QR asociados a distintos códigos en cualquier módulo ({{ qr_otros_codigos_total }})</h5>
+    <div class="table-responsive"><table class="table table-sm"><thead><tr><th>QR</th><th>Códigos patrimoniales</th></tr></thead><tbody>{% for item in qr_otros_codigos %}<tr><td>{{ item.qr }}</td><td>{{ item.codigos|join(", ") }}</td></tr>{% endfor %}</tbody></table></div>
+</div></section>
+{% endif %}
+{% endblock %}

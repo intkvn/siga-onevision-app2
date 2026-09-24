@@ -16,6 +16,7 @@ def pagina_login(request: Request, error: str = ""):
 def procesar_login(request: Request, username: str = Form(...), password: str = Form(...)):
     if verificar_credenciales(username, password):
         request.session["logueado"] = True
+        request.session["usuario"] = username
         return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/login?error=Usuario+o+contraseña+incorrectos", status_code=303)
 

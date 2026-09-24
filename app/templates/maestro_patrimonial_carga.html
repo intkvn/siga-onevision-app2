@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_paginacion.html" import mostrar_paginacion %}
+{% block titulo %}Carga patrimonial #{{ carga.id }}{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div><h2 class="mb-1">Carga patrimonial #{{ carga.id }}</h2><p class="text-muted mb-0">{{ carga.nombre_archivo }} · {{ carga.tipo_carga }} · {{ carga.usuario_carga }} · {{ carga.creado_en.strftime("%d/%m/%Y %H:%M") }}</p></div>
+    <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Volver</a>
+</div>
+
+{% if carga.estado in ["Validando", "Procesando"] %}
+<div class="alert alert-info" id="carga-en-proceso">
+    <div id="mensaje-progreso">{{ carga.mensaje_progreso or ("Validando el reporte" if carga.estado == "Validando" else "Aplicando la carga") }}</div>
+    <div class="progress mt-2" role="progressbar" aria-label="Avance de carga">
+        <div class="progress-bar" id="barra-progreso" style="width: {{ carga.progreso }}%">{{ carga.progreso }}%</div>
+    </div>
+</div>
+{% elif carga.estado == "Rechazada" %}<div class="alert alert-danger">La carga fue rechazada. Corrige los errores y vuelve a cargar el reporte.</div>
+{% elif carga.estado == "Lista para confirmar" %}<div class="alert alert-warning">La validación terminó sin errores. Revisa el resumen antes de confirmar.</div>
+{% elif carga.estado == "Completada" %}<div class="alert alert-success">La carga fue aplicada correctamente.</div>
+{% elif carga.estado == "Interrumpida" %}<div class="alert alert-danger">El procesamiento fue interrumpido y no modificó los bienes. Puedes reintentarlo después de corregir la causa.</div>
+{% endif %}
+{% if carga.tipo_carga == "Parcial" %}
+<div class="alert alert-secondary">Esta carga es parcial. Los bienes que no aparecen en el archivo no se clasifican como “No incluidos”.</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+    {% for titulo, valor, estilo, filtro in [
+        ("Filas leídas", carga.total_filas, "dark", ""),
+        ("Nuevos", carga.total_nuevos, "success", "Nuevo"),
+        ("Actualizados", carga.total_actualizados, "primary", "Actualizado"),
+        ("Sin cambios", carga.total_sin_cambios, "secondary", "Sin cambios"),
+        ("No incluidos", carga.total_no_incluidos, "warning", "No incluido"),
+        ("Errores", carga.total_errores, "danger", ""),
+        ("Alertas QR", carga.total_alertas, "warning", "")
+    ] %}
+    <div class="col-6 col-lg"><div class="card h-100 border-{{ estilo }}"><div class="card-body text-center"><div class="h2">{{ valor }}</div>{% if filtro %}<a href="?clasificacion={{ filtro|urlencode }}">{{ titulo }}</a>{% else %}<div class="text-muted">{{ titulo }}</div>{% endif %}</div></div></div>
+    {% endfor %}
+</div>
+
+{% if carga.estado == "Lista para confirmar" %}
+<div class="d-flex gap-2 mb-4">
+    <form method="post" action="/maestro-patrimonial/cargas/{{ carga.id }}/confirmar"><button class="btn btn-primary" type="submit">Confirmar y aplicar carga</button></form>
+    <form method="post" action="/maestro-patrimonial/cargas/{{ carga.id }}/cancelar"><button class="btn btn-outline-danger" type="submit">Cancelar carga</button></form>
+</div>
+{% endif %}
+{% if carga.estado == "Interrumpida" and carga.total_errores == 0 and carga.filas_validas > 0 %}
+<div class="mb-4"><form method="post" action="/maestro-patrimonial/cargas/{{ carga.id }}/confirmar"><button class="btn btn-primary" type="submit">Reintentar procesamiento</button></form></div>
+{% endif %}
+
+{% if alertas %}
+<section class="card border-warning mb-4"><div class="card-body"><h5 class="card-title">Alertas para subsanar</h5><p class="text-muted small">Estas alertas no impiden confirmar la carga.</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Campo</th><th>QR</th><th>Códigos patrimoniales</th><th>Filas</th></tr></thead><tbody>{% for alerta in alertas %}<tr><td>{{ alerta.campo }}</td><td>{{ alerta.qr }}</td><td>{{ alerta.codigos|join(", ") }}</td><td>{{ alerta.filas|join(", ") }}</td></tr>{% endfor %}</tbody></table></div></div></section>
+{% endif %}
+
+{% if errores %}
+<section class="card mb-4"><div class="card-body"><h5 class="card-title">Errores de validación</h5><div class="table-responsive" style="max-height: 500px;"><table class="table table-sm"><thead><tr><th>Fila</th><th>Campo</th><th>Detalle</th></tr></thead><tbody>{% for error in errores %}<tr><td>{{ error.fila or "-" }}</td><td>{{ error.campo }}</td><td>{{ error.mensaje }}</td></tr>{% endfor %}</tbody></table></div>{% if carga.total_errores > errores|length %}<p class="text-muted mb-0">Se muestran los primeros {{ errores|length }} de {{ carga.total_errores }} errores.</p>{% endif %}</div></section>
+{% endif %}
+
+{% if filas %}
+<section class="card"><div class="card-body"><div class="d-flex justify-content-between"><h5 class="card-title">Resultado {{ clasificacion or "completo" }}</h5>{% if clasificacion %}<a href="/maestro-patrimonial/cargas/{{ carga.id }}">Quitar filtro</a>{% endif %}</div><div class="table-responsive"><table class="table table-sm table-hover"><thead><tr><th>Fila</th><th>Código patrimonial</th><th>Clasificación</th><th></th></tr></thead><tbody>{% for fila in filas %}<tr><td>{{ fila.numero_fila or "-" }}</td><td>{{ fila.codigo_patrimonial }}</td><td>{{ fila.clasificacion }}</td><td>{% if fila.bien_id %}<a class="btn btn-sm btn-outline-primary" href="/maestro-patrimonial/bienes/{{ fila.bien_id }}">Ver bien</a>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{{ mostrar_paginacion(url_base, pagina, total_paginas, paginas, inicio, fin, total, "resultados") }}</div></section>
+{% endif %}
+
+{% if carga.estado in ["Validando", "Procesando"] %}
+<script>
+setTimeout(function consultar() {
+    fetch("/maestro-patrimonial/cargas/{{ carga.id }}/estado")
+        .then(r => r.json()).then(data => {
+            if (["Validando", "Procesando"].includes(data.estado)) {
+                const barra = document.getElementById("barra-progreso");
+                const mensaje = document.getElementById("mensaje-progreso");
+                barra.style.width = `${data.progreso || 0}%`;
+                barra.textContent = `${data.progreso || 0}%`;
+                if (data.mensaje) mensaje.textContent = data.mensaje;
+                setTimeout(consultar, 1500);
+            }
+            else window.location.reload();
+        }).catch(() => setTimeout(consultar, 3000));
+}, 1200);
+</script>
+{% endif %}
+{% endblock %}

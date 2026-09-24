@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% from "_paginacion.html" import mostrar_paginacion %}
+{% block titulo %}Maestro Patrimonial{% endblock %}
+{% block contenido %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Maestro Patrimonial</h2>
+        <p class="text-muted mb-0">Consulta, actualización e historial del reporte SIGA Patrimonio.</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+        <a class="btn btn-outline-warning" href="/maestro-patrimonial/calidad">Calidad de datos</a>
+        {% if ultima_carga %}
+        <span class="badge text-bg-dark fs-6">Última carga #{{ ultima_carga.id }} · {{ ultima_carga.confirmado_en.strftime("%d/%m/%Y %H:%M") }}</span>
+        {% endif %}
+    </div>
+</div>
+
+{% if request.query_params.get("error") %}<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>{% endif %}
+{% if request.query_params.get("info") %}<div class="alert alert-success">{{ request.query_params.get("info") }}</div>{% endif %}
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Validar nuevo reporte SIGA</h5>
+        <p class="text-muted small">Primero se revisa la estructura, los campos obligatorios y los códigos repetidos. Ningún bien cambia hasta que confirmes el resultado.</p>
+        <form method="post" action="/maestro-patrimonial/cargas/validar" enctype="multipart/form-data" class="row g-3 align-items-end" id="form-carga-mp">
+            <div class="col-md-6">
+                <label class="form-label">Reporte Maestro Patrimonial (.xlsx)</label>
+                <input class="form-control" type="file" name="archivo" accept=".xlsx" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Alcance del reporte</label>
+                <select class="form-select" name="tipo_carga" required>
+                    <option value="Completa">Carga completa</option>
+                    <option value="Parcial">Carga parcial</option>
+                </select>
+                <div class="form-text">Una carga parcial no genera bienes “No incluidos”.</div>
+            </div>
+            <div class="col-md-3"><button class="btn btn-primary w-100" type="submit" id="boton-validar-mp">Validar reporte</button></div>
+        </form>
+    </div>
+</section>
+
+<form method="get" action="/maestro-patrimonial" class="card card-body mb-4">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <label class="form-label">Código patrimonial</label>
+            <input class="form-control" type="search" name="codigo_patrimonial" value="{{ filtros.codigo_patrimonial }}" placeholder="Buscar código patrimonial">
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Código QR</label>
+            <input class="form-control" type="search" name="codigo_qr" value="{{ filtros.codigo_qr }}" placeholder="Buscar código QR">
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Descripción</label>
+            <input class="form-control" type="search" name="descripcion" value="{{ filtros.descripcion }}" placeholder="Buscar descripción del bien">
+        </div>
+    </div>
+    <div class="row g-3 mt-0">
+        {% for campo, etiqueta, placeholder in [
+            ("dependencia", "Dependencia", "Todas las dependencias"),
+            ("usuario", "Usuario", "Todos los usuarios"),
+            ("ubicacion", "Ubicación física", "Todas las ubicaciones")
+        ] %}
+        <div class="col-md-4">
+            <label class="form-label">{{ etiqueta }}</label>
+            <select class="form-select filtro-mp" name="{{ campo }}" data-campo="{{ campo }}" data-placeholder="{{ placeholder }}">
+                <option value="">{{ placeholder }}</option>
+                {% if filtros[campo] %}<option value="{{ filtros[campo] }}" selected>{{ filtros[campo] }}</option>{% endif %}
+            </select>
+        </div>
+        {% endfor %}
+    </div>
+
+    <details class="mt-3" {% if filtros.modelo or filtros.numero_orden or filtros.numero_documento or filtros.marca or filtros.estado_conservacion or filtros.numero_serie or filtros.color or filtros.fecha_compra_desde or filtros.fecha_compra_hasta or filtros.fecha_alta_desde or filtros.fecha_alta_hasta or filtros.fecha_nea_desde or filtros.fecha_nea_hasta %}open{% endif %}>
+        <summary class="btn btn-outline-secondary">Búsqueda avanzada</summary>
+        <div class="row g-3 mt-1">
+            {% for campo, etiqueta in [
+                ("modelo", "Modelo"), ("numero_orden", "Número de orden"),
+                ("numero_documento", "Número de documento"), ("marca", "Marca"),
+                ("estado_conservacion", "Estado de conservación"),
+                ("numero_serie", "Número de serie"), ("color", "Color")
+            ] %}
+            <div class="col-md-4">
+                <label class="form-label">{{ etiqueta }}</label>
+                {% if campo in ["modelo", "marca", "estado_conservacion", "color"] %}
+                <select class="form-select filtro-mp" name="{{ campo }}" data-campo="{{ campo }}" data-placeholder="Todos">
+                    <option value="">Todos</option>
+                    {% if filtros[campo] %}<option value="{{ filtros[campo] }}" selected>{{ filtros[campo] }}</option>{% endif %}
+                </select>
+                {% else %}
+                <input class="form-control" type="search" name="{{ campo }}" value="{{ filtros[campo] }}">
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% for campo, etiqueta in [("fecha_compra", "Fecha de compra"), ("fecha_alta", "Fecha de alta"), ("fecha_nea", "Fecha NEA")] %}
+            <div class="col-md-4">
+                <label class="form-label">{{ etiqueta }}</label>
+                <div class="input-group">
+                    <span class="input-group-text">Desde</span>
+                    <input class="form-control" type="date" name="{{ campo }}_desde" value="{{ filtros[campo ~ '_desde'] }}">
+                    <span class="input-group-text">Hasta</span>
+                    <input class="form-control" type="date" name="{{ campo }}_hasta" value="{{ filtros[campo ~ '_hasta'] }}">
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    <div class="d-flex flex-wrap gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Aplicar filtros</button>
+        <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Limpiar</a>
+        <a class="btn btn-success ms-md-auto" href="/maestro-patrimonial/exportar{% if query_exportar %}?{{ query_exportar }}{% endif %}">Exportar Excel ({{ total }})</a>
+    </div>
+</form>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4"><div class="card h-100"><div class="card-body text-center"><div class="display-6">{{ total }}</div><div class="text-muted">Bienes filtrados</div></div></div></div>
+    <div class="col-md-4"><div class="card h-100"><div class="card-body text-center"><div class="display-6">{{ cargas|length }}</div><div class="text-muted">Cargas recientes</div></div></div></div>
+    <div class="col-md-4"><div class="card h-100 {{ 'border-warning' if conflictos_pendientes else '' }}"><div class="card-body text-center"><div class="display-6">{{ conflictos_pendientes }}</div><div class="text-muted">Conflictos pendientes</div></div></div></div>
+</div>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Bienes patrimoniales</h5>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead><tr><th>Cód. patrimonial</th><th>Cód. QR</th><th>Descripción</th><th>Dependencia</th><th>Usuario</th><th>Ubicación</th><th>Estado</th><th></th></tr></thead>
+                <tbody>
+                {% for bien in bienes %}
+                <tr>
+                    <td>{{ bien.codigo_patrimonial }}</td>
+                    <td>{{ bien.codigo_qr or "Sin dato" }}</td>
+                    <td>{{ bien.descripcion }}</td>
+                    <td>{{ bien.nombre_dependencia }}</td>
+                    <td>{{ bien.usuario }}</td>
+                    <td>{{ bien.ubicacion_fisica }}</td>
+                    <td>{{ bien.estado_conservacion }}</td>
+                    <td><a class="btn btn-sm btn-outline-primary" href="/maestro-patrimonial/bienes/{{ bien.id }}">Ver detalle</a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">No hay bienes con estos filtros.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {{ mostrar_paginacion(url_base, pagina, total_paginas, paginas, inicio, fin, total, "bienes") }}
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-body">
+        <h5 class="card-title">Historial de cargas</h5>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Carga</th><th>Archivo</th><th>Alcance</th><th>Fecha</th><th>Usuario</th><th>Filas</th><th>Estado</th><th></th></tr></thead>
+            <tbody>
+            {% for carga in cargas %}
+            <tr><td>#{{ carga.id }}</td><td>{{ carga.nombre_archivo }}</td><td>{{ carga.tipo_carga }}</td><td>{{ carga.creado_en.strftime("%d/%m/%Y %H:%M") }}</td><td>{{ carga.usuario_carga }}</td><td>{{ carga.total_filas }}</td><td>{{ carga.estado }}</td><td><a class="btn btn-sm btn-outline-secondary" href="/maestro-patrimonial/cargas/{{ carga.id }}">Abrir</a></td></tr>
+            {% else %}<tr><td colspan="8" class="text-center text-muted">Todavía no hay cargas.</td></tr>{% endfor %}
+            </tbody>
+        </table></div>
+    </div>
+</section>
+
+<section class="card mt-4">
+    <div class="card-body">
+        <h5 class="card-title">Exportaciones recientes</h5>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Exportación</th><th>Tipo</th><th>Fecha</th><th>Filas</th><th>Estado</th><th></th></tr></thead>
+            <tbody>
+            {% for exportacion in exportaciones %}
+            <tr><td>#{{ exportacion.id }}</td><td>{{ exportacion.tipo_reporte }}</td><td>{{ exportacion.creado_en.strftime("%d/%m/%Y %H:%M") }}</td><td>{{ exportacion.total_filas }}</td><td>{{ exportacion.estado }}{% if exportacion.estado in ["Pendiente", "Procesando"] %} ({{ exportacion.progreso }}%){% endif %}</td><td><a class="btn btn-sm btn-outline-secondary" href="/maestro-patrimonial/exportaciones/{{ exportacion.id }}">Abrir</a></td></tr>
+            {% else %}<tr><td colspan="6" class="text-center text-muted">Todavía no hay exportaciones.</td></tr>{% endfor %}
+            </tbody>
+        </table></div>
+    </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+(function () {
+    document.querySelectorAll(".filtro-mp").forEach(function (elemento) {
+        new TomSelect(elemento, {
+            valueField: "value", labelField: "label", searchField: "label",
+            maxItems: 1, allowEmptyOption: true, preload: true, loadThrottle: 250,
+            placeholder: elemento.dataset.placeholder,
+            load: function (query, callback) {
+                const params = new URLSearchParams({campo: elemento.dataset.campo, q: query});
+                fetch("/maestro-patrimonial/opciones?" + params.toString())
+                    .then(r => r.json()).then(data => callback(data.options || []))
+                    .catch(() => callback());
+            }
+        });
+    });
+    const form = document.getElementById("form-carga-mp");
+    if (form) form.addEventListener("submit", function () {
+        const boton = document.getElementById("boton-validar-mp");
+        boton.disabled = true; boton.textContent = "Subiendo...";
+    });
+})();
+</script>
+{% endblock %}

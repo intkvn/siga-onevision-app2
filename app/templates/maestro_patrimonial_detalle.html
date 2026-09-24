@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block titulo %}Bien {{ bien.codigo_patrimonial }}{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div><h2 class="mb-1">Bien {{ bien.codigo_patrimonial }}</h2><p class="text-muted mb-0">{{ bien.descripcion }}</p></div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-primary" target="_blank" href="/maestro-patrimonial/bienes/{{ bien.id }}/ficha.pdf">Generar ficha PDF</a>
+        <a class="btn btn-outline-secondary" href="/maestro-patrimonial">Volver</a>
+    </div>
+</div>
+{% if request.query_params.get("error") %}<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>{% endif %}
+{% if request.query_params.get("info") %}<div class="alert alert-success">{{ request.query_params.get("info") }}</div>{% endif %}
+
+{% if inconsistencias_qr %}<div class="alert alert-warning"><strong>Inconsistencia de QR:</strong> el QR {{ bien.codigo_qr }} aparece con otro código patrimonial en {{ inconsistencias_qr|join(", ") }}.</div>{% endif %}
+{% if qr_repetido_maestro %}<div class="alert alert-warning"><strong>QR repetido en Maestro Patrimonial:</strong> el QR {{ bien.codigo_qr }} también aparece en {% for otro in qr_repetido_maestro %}<a href="/maestro-patrimonial/bienes/{{ otro.id }}">{{ otro.codigo_patrimonial }}</a>{{ ", " if not loop.last else "" }}{% endfor %}. Debe revisarse y subsanarse en SIGA.</div>{% endif %}
+
+{% if conflictos %}
+<section class="card border-warning mb-4"><div class="card-body"><h5 class="card-title">Conflictos pendientes</h5>{% for conflicto in conflictos %}<div class="border rounded p-3 mb-2"><strong>{{ etiquetas[conflicto.campo] }}</strong><div class="row mt-2"><div class="col-md">SIGA anterior: {{ conflicto.valor_siga_anterior if conflicto.valor_siga_anterior is not none else "Sin dato" }}</div><div class="col-md">SIGA nuevo: {{ conflicto.valor_siga_nuevo if conflicto.valor_siga_nuevo is not none else "Sin dato" }}</div><div class="col-md">Corrección manual: {{ conflicto.valor_manual if conflicto.valor_manual is not none else "Sin dato" }}</div></div><div class="d-flex gap-2 mt-3"><form method="post" action="/maestro-patrimonial/conflictos/{{ conflicto.id }}/resolver"><input type="hidden" name="decision" value="manual"><button class="btn btn-sm btn-outline-primary">Conservar corrección</button></form><form method="post" action="/maestro-patrimonial/conflictos/{{ conflicto.id }}/resolver"><input type="hidden" name="decision" value="siga"><button class="btn btn-sm btn-primary">Aceptar SIGA</button></form></div></div>{% endfor %}</div></section>
+{% endif %}
+
+<section class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+                <h5 class="card-title mb-0">Información vigente</h5>
+                <span class="text-muted small">Actualizado {{ bien.actualizado_en.strftime("%d/%m/%Y %H:%M") }}</span>
+            </div>
+            <button class="btn btn-outline-primary" type="button" id="boton-editar-bien">Editar</button>
+        </div>
+
+        <div id="vista-bien" class="row g-3 mt-1">
+            {% for campo, etiqueta in campos %}
+            {% set valor = bien|attr(campo) %}
+            <div class="col-md-6 col-lg-4">
+                <div class="text-muted small">{{ etiqueta }}</div>
+                <div class="fw-semibold text-break">
+                    {% if valor is none or valor == "" %}<span class="text-muted">Sin dato</span>
+                    {% elif valor.strftime is defined %}{{ valor.strftime("%d/%m/%Y") }}
+                    {% else %}{{ valor }}{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <form method="post" action="/maestro-patrimonial/bienes/{{ bien.id }}/editar" class="row g-3 mt-1 d-none" id="formulario-editar-bien">
+            {% for campo, etiqueta, tipo in campos_editables %}
+            {% set valor = bien|attr(campo) %}
+            <div class="col-md-6">
+                <label class="form-label">{{ etiqueta }}</label>
+                {% if campo in ["caracteristicas", "observaciones"] %}
+                <textarea class="form-control" name="{{ campo }}" rows="3" {% if campo not in campos_opcionales %}required{% endif %}>{{ valor or "" }}</textarea>
+                {% else %}
+                <input class="form-control" name="{{ campo }}" type="{{ 'date' if tipo == 'fecha' else 'number' if tipo == 'decimal' else 'text' }}" {% if tipo == "decimal" %}step="0.0001"{% endif %} value="{% if valor is none %}{% elif valor.strftime is defined %}{{ valor.isoformat() }}{% else %}{{ valor }}{% endif %}" {% if campo not in campos_opcionales %}required{% endif %}>
+                {% endif %}
+            </div>
+            {% endfor %}
+            <div class="col-12">
+                <label class="form-label">Motivo de la corrección</label>
+                <textarea class="form-control" name="motivo" rows="2" required></textarea>
+            </div>
+            <div class="col-12 d-flex gap-2">
+                <button class="btn btn-primary" type="submit">Guardar corrección</button>
+                <button class="btn btn-outline-secondary" type="button" id="boton-cancelar-edicion">Cancelar</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-6">
+        <section class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Relación con otros módulos</h5>
+                <p class="mb-2"><strong>Altas:</strong> {{ altas|length }} registro(s)</p>
+                {% for alta in altas %}
+                <div class="border rounded p-2 mb-2 small">
+                    <div><strong>Lote:</strong> #{{ alta.bien.lote_id or "-" }} · <strong>Pecosa:</strong> {{ alta.pecosa.numero if alta.pecosa else "-" }}</div>
+                    <div><strong>Expediente de alta:</strong> {{ alta.expediente_alta or "Sin dato" }}</div>
+                    <div><strong>Expediente de firma:</strong> {{ alta.expediente_firma or "Sin dato" }}</div>
+                    <div><strong>Firmante:</strong> {{ alta.firmante_nombre or "Sin dato" }} · <strong>DNI:</strong> {{ alta.firmante_dni or "Sin dato" }}</div>
+                    <div><strong>QR:</strong> {{ alta.bien.codigo_qr or "Sin dato" }}</div>
+                </div>
+                {% else %}
+                <p class="text-muted small">Sin registros de alta relacionados.</p>
+                {% endfor %}
+                <hr>
+                <p class="mb-2"><strong>Control Impresión:</strong> {{ impresiones|length }} registro(s)</p>
+                {% for item in impresiones %}
+                <div class="small">Inventario #{{ item.inventario_id }} · {{ item.estado_impresion }} · QR {{ item.codigo_qr or "Sin dato" }}</div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+    <div class="col-lg-6">
+        <section class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Participación en cargas</h5>
+                <div style="max-height:300px;overflow:auto">
+                    {% for item in participaciones %}
+                    <div class="border-bottom py-2"><a href="/maestro-patrimonial/cargas/{{ item.carga_id }}">Carga #{{ item.carga_id }}</a> · {{ item.clasificacion }}{% if item.numero_fila %} · fila {{ item.numero_fila }}{% endif %}</div>
+                    {% else %}<p class="text-muted">Sin cargas registradas.</p>{% endfor %}
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Línea de tiempo del bien</h5>
+        <p class="text-muted small">Reúne los movimientos registrados en Maestro Patrimonial, Altas y Control Impresión.</p>
+        <div class="list-group list-group-flush">
+            {% for evento in linea_tiempo %}
+            <div class="list-group-item px-0">
+                <div class="d-flex flex-wrap justify-content-between gap-2">
+                    <div>
+                        <span class="badge text-bg-secondary me-2">{{ evento.tipo }}</span>
+                        {% if evento.url %}<a class="fw-semibold" href="{{ evento.url }}">{{ evento.titulo }}</a>{% else %}<strong>{{ evento.titulo }}</strong>{% endif %}
+                    </div>
+                    <span class="text-muted small">{{ evento.fecha.strftime("%d/%m/%Y" if evento.solo_fecha else "%d/%m/%Y %H:%M") }}</span>
+                </div>
+                <div class="small mt-1">{{ evento.detalle }}</div>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">Todavía no hay eventos fechados para este bien.</p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="card"><div class="card-body"><h5 class="card-title">Historial de cambios</h5>{% for version in versiones %}<div class="border rounded p-3 mb-3"><div class="d-flex flex-wrap justify-content-between gap-2"><strong>{{ version.origen }}{% if version.carga_id %} · Carga #{{ version.carga_id }}{% endif %}</strong><span class="text-muted small">{{ version.creado_en.strftime("%d/%m/%Y %H:%M") }} · {{ version.usuario }}</span></div>{% if version.cambios %}<div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>Campo</th><th>Anterior</th><th>Nuevo</th></tr></thead><tbody>{% for cambio in version.cambios %}<tr><td>{{ etiquetas.get(cambio.campo, cambio.campo) }}</td><td>{{ cambio.valor_anterior if cambio.valor_anterior is not none else "Sin dato" }}</td><td>{{ cambio.valor_nuevo if cambio.valor_nuevo is not none else "Sin dato" }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="text-muted small mt-2">Registro inicial del bien.</div>{% endif %}</div>{% else %}<p class="text-muted">Todavía no hay versiones.</p>{% endfor %}</div></section>
+
+<script>
+(function () {
+    const botonEditar = document.getElementById("boton-editar-bien");
+    const botonCancelar = document.getElementById("boton-cancelar-edicion");
+    const vista = document.getElementById("vista-bien");
+    const formulario = document.getElementById("formulario-editar-bien");
+    function cambiarEdicion(editando) {
+        vista.classList.toggle("d-none", editando);
+        formulario.classList.toggle("d-none", !editando);
+        botonEditar.classList.toggle("d-none", editando);
+        if (editando) formulario.querySelector("input, textarea")?.focus();
+    }
+    botonEditar.addEventListener("click", () => cambiarEdicion(true));
+    botonCancelar.addEventListener("click", () => cambiarEdicion(false));
+})();
+</script>
+{% endblock %}

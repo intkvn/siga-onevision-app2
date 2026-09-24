@@ -1,16 +1,18 @@
+import io
 import os
 import inspect
+import json
 import re
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import xlrd
 import xlwt
 import pandas as pd
-from openpyxl import Workbook as OpenpyxlWorkbook
+from openpyxl import Workbook as OpenpyxlWorkbook, load_workbook
 from reportlab.lib.units import mm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,7 +21,12 @@ from app.database import Base, _opciones_engine
 from app.models import (
     BienAlta, CentroCosto, CorreccionAsignacionBien, Expediente, Pecosa,
     LoteCarga, Persona, RelacionPecosaItem, VerificacionPecosaSiga,
-    ObservacionControlPecosa, PerfilImpresionEtiqueta,
+    ObservacionControlPecosa, PerfilImpresionEtiqueta, InventarioImpresion,
+    BienInventarioImpresion, LoteImpresionInventario,
+    ItemLoteImpresionInventario, CargaPatrimonial, BienPatrimonial,
+    BienCargaPatrimonial, VersionBienPatrimonial, CambioBienPatrimonial,
+    CorreccionBienPatrimonial, ConflictoBienPatrimonial,
+    ExportacionPatrimonial,
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import (
@@ -39,14 +46,29 @@ from app.services.excel_onevision import (
     ENCABEZADOS, generar_formato_importacion, iterar_reporte_qr_onevision,
 )
 from app.services.excel_verificacion import leer_reporte_verificacion
+from app.services.excel_inventario_impresion import importar_reporte_inventario
 from app.services.lote_status import expedientes_de_lotes
 from app.services.pagination import paginas_visibles, rango_registros
 from app.services.pdf_etiquetas import (
     _ajustar_bloques_inferiores, clasificar_bienes_impresion, generar_pdf_etiquetas,
     numero_paginas_para_bienes,
 )
+from app.services.pdf_ficha_patrimonial import generar_ficha_activo_pdf
 from app.routers.verificacion import (
     ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
+)
+from app.routers.control_impresion import (
+    _confirmar_items_impresos, _estado_bien, _marcar_pdf_generado,
+    _opciones_distintas,
+)
+from app.routers.maestro_patrimonial import (
+    _aplicar_filtros, _datos_firmante, _resumen_calidad_datos,
+    generar_exportacion_patrimonial,
+)
+from app.services.maestro_patrimonial import (
+    CAMPOS_EDITABLES, ENCABEZADOS_SIGA, confirmar_carga_patrimonial,
+    editar_bien_patrimonial, preparar_carga, resolver_conflicto,
+    validar_carga_patrimonial, validar_carga_patrimonial_desde_bd,
 )
 
 
@@ -938,6 +960,597 @@ class RegularizacionCargaInicialTest(unittest.TestCase):
         self.assertEqual(resumen["lotes_actualizados"], 1)
         self.assertIsNone(self.bien_normal.nombre_completo_siga)
         self.assertEqual(_resumen_lote(self.db, self.bien_historico.lote)["estado"], "Incompleto")
+
+
+class ControlImpresionInventarioTest(unittest.TestCase):
+    ENCABEZADOS = [
+        "Código Patrimonial", "Código QR", "Ruta QR", "Bien",
+        "Establecimiento", "RED", "Área", "Marca", "Modelo", "Color",
+        "Nr. Serie",
+    ]
+
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.db = sessionmaker(bind=engine)()
+        expediente = Expediente(numero="90001")
+        lote = LoteCarga(anio="2026", ejecutora="785")
+        self.db.add_all([expediente, lote])
+        self.db.flush()
+        pecosa = Pecosa(numero="9901", expediente_id=expediente.id)
+        self.db.add(pecosa)
+        self.db.flush()
+        self.db.add(BienAlta(
+            pecosa_id=pecosa.id,
+            lote_id=lote.id,
+            codigo_patrimonial="0001",
+            descripcion="BIEN CON ALTA",
+        ))
+        self.db.commit()
+        self.rutas = []
+
+    def tearDown(self):
+        self.db.close()
+        for ruta in self.rutas:
+            if os.path.exists(ruta):
+                os.remove(ruta)
+
+    def _reporte(self, filas):
+        libro = OpenpyxlWorkbook()
+        hoja = libro.active
+        hoja.append(self.ENCABEZADOS)
+        for fila in filas:
+            hoja.append(fila)
+        temporal = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        temporal.close()
+        libro.save(temporal.name)
+        self.rutas.append(temporal.name)
+        return temporal.name
+
+    def test_importa_actualiza_y_conserva_sin_area(self):
+        ruta = self._reporte([
+            [
+                " 0001 ", 1, "https://sir.example/qr/equipo/1", "EQUIPO 1",
+                "ESTABLECIMIENTO A", None, None, "MARCA", "MODELO", "NEGRO", "S1",
+            ],
+            [
+                "0002", 2, None, "EQUIPO 2", "ESTABLECIMIENTO A",
+                "RED A", "AREA A", None, None, None, None,
+            ],
+            [
+                "0001", 1, "https://sir.example/qr/equipo/1", "DUPLICADO",
+                "ESTABLECIMIENTO A", None, None, None, None, None, None,
+            ],
+        ])
+
+        resultado = importar_reporte_inventario(
+            self.db, ruta, "reporte.xlsx", anio="2026"
+        )
+
+        self.assertEqual(resultado["total"], 2)
+        self.assertEqual(resultado["duplicados"], 1)
+        bienes = self.db.query(BienInventarioImpresion).order_by(
+            BienInventarioImpresion.codigo_patrimonial
+        ).all()
+        self.assertEqual(bienes[0].codigo_patrimonial, "0001")
+        self.assertEqual(bienes[0].codigo_qr, "1")
+        self.assertIsNone(bienes[0].area)
+        self.assertEqual(bienes[0].relacion_alta, "Vinculado")
+        self.assertEqual(bienes[1].motivo_bloqueo, "Sin Ruta QR")
+        self.assertEqual(bienes[0].estado_impresion, "Pendiente")
+        self.assertEqual(bienes[1].estado_impresion, "Bloqueado")
+
+        bienes[0].estado_impresion = "Impreso"
+        bienes[0].impreso_en = datetime.utcnow()
+        self.db.commit()
+
+        ruta_actualizada = self._reporte([[
+            "0001", 1, "https://sir.example/qr/equipo/1", "EQUIPO ACTUALIZADO",
+            "ESTABLECIMIENTO A", "RED A", "AREA COMPLETA", "MARCA", "MODELO",
+            "NEGRO", "S1",
+        ]])
+        segundo = importar_reporte_inventario(
+            self.db, ruta_actualizada, "reporte_actualizado.xlsx", anio="2026"
+        )
+        self.assertEqual(segundo["nuevos"], 0)
+        self.assertEqual(segundo["actualizados"], 1)
+        self.assertEqual(segundo["inactivos"], 1)
+        self.db.expire_all()
+        primero = self.db.query(BienInventarioImpresion).filter_by(
+            codigo_patrimonial="0001"
+        ).one()
+        segundo_bien = self.db.query(BienInventarioImpresion).filter_by(
+            codigo_patrimonial="0002"
+        ).one()
+        self.assertEqual(primero.area, "AREA COMPLETA")
+        self.assertEqual(primero.activo, 1)
+        self.assertEqual(primero.estado_impresion, "Impreso")
+        self.assertEqual(segundo_bien.activo, 0)
+
+    def test_estado_cambia_al_generar_y_confirmar_impresion(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        bien = BienInventarioImpresion(
+            inventario=inventario,
+            codigo_patrimonial="1001",
+            codigo_qr="10",
+            ruta_qr="https://sir.example/qr/equipo/10",
+            descripcion="BIEN",
+            imprimible=1,
+        )
+        self.db.add_all([inventario, bien])
+        self.db.commit()
+        self.assertEqual(_estado_bien(bien), "Pendiente")
+
+        lote = LoteImpresionInventario(
+            inventario_id=inventario.id, estado="Preparado", total_bienes=1
+        )
+        item = ItemLoteImpresionInventario(lote=lote, bien=bien)
+        self.db.add_all([lote, item])
+        self.db.commit()
+        self.assertEqual(_estado_bien(bien), "Pendiente")
+
+        _marcar_pdf_generado(self.db, lote)
+        self.db.refresh(bien)
+        self.assertEqual(_estado_bien(bien), "Sticker generado")
+        self.assertIsNotNone(bien.sticker_generado_en)
+
+        consulta = self.db.query(ItemLoteImpresionInventario).filter_by(
+            lote_id=lote.id
+        )
+        actualizados = _confirmar_items_impresos(self.db, lote, consulta)
+        self.assertEqual(actualizados, 1)
+        self.db.refresh(bien)
+        self.assertEqual(_estado_bien(bien), "Impreso")
+        self.assertIsNotNone(bien.impreso_en)
+
+    def test_opciones_buscables_respetan_dependencias_y_limite(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        self.db.add(inventario)
+        self.db.flush()
+        for numero, (red, establecimiento, area) in enumerate([
+            ("RED A", "CENTRO NORTE", "ALMACEN"),
+            ("RED A", "CENTRO SUR", "PATRIMONIO"),
+            ("RED B", "CENTRO ESTE", "ALMACEN"),
+            ("RED A", None, None),
+        ], start=1):
+            self.db.add(BienInventarioImpresion(
+                inventario_id=inventario.id,
+                codigo_patrimonial=f"B{numero}",
+                descripcion="BIEN",
+                red=red,
+                establecimiento=establecimiento,
+                area=area,
+            ))
+        self.db.commit()
+
+        opciones = _opciones_distintas(
+            self.db,
+            BienInventarioImpresion.establecimiento,
+            inventario.id,
+            q="sur",
+            red="RED A",
+        )
+        self.assertEqual(opciones, [{"value": "CENTRO SUR", "label": "CENTRO SUR"}])
+
+        con_vacio = _opciones_distintas(
+            self.db,
+            BienInventarioImpresion.establecimiento,
+            inventario.id,
+            red="RED A",
+        )
+        self.assertEqual(con_vacio[0], {"value": "__SIN_DATO__", "label": "Sin dato"})
+
+
+class MaestroPatrimonialTest(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.factory = sessionmaker(bind=self.engine)
+        self.db = self.factory()
+        self.rutas = []
+
+    def tearDown(self):
+        self.db.close()
+        for ruta in self.rutas:
+            if os.path.exists(ruta):
+                os.remove(ruta)
+
+    def _fila(self, codigo="0001", qr="QR-001", usuario="USUARIO A"):
+        fila = [None] * len(ENCABEZADOS_SIGA)
+        valores = {
+            0: codigo,
+            1: "AUTOCLAVE DE PRUEBA",
+            3: "DEPENDENCIA DE PRUEBA",
+            5: usuario,
+            8: 1250.50,
+            9: date(2026, 1, 10),
+            10: 1250.50,
+            13: "LABORATORIO",
+            17: qr,
+            19: "100",
+            21: 900,
+            26: "MARCA A",
+            28: "Bueno",
+        }
+        for indice, valor in valores.items():
+            fila[indice] = valor
+        return fila
+
+    def _reporte(self, filas, encabezados=None):
+        libro = OpenpyxlWorkbook()
+        hoja = libro.active
+        hoja.append(encabezados or ENCABEZADOS_SIGA)
+        for fila in filas:
+            hoja.append(fila)
+        temporal = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        temporal.close()
+        libro.save(temporal.name)
+        libro.close()
+        self.rutas.append(temporal.name)
+        return temporal.name
+
+    def test_separa_firmante_y_completa_dni_desde_el_maestro(self):
+        self.db.add(Persona(nombre_completo="PERSONA DE PRUEBA", dni="12345678"))
+        self.db.commit()
+
+        self.assertEqual(
+            _datos_firmante(self.db, "OTRA PERSONA (87654321)"),
+            ("OTRA PERSONA", "87654321"),
+        )
+        self.assertEqual(
+            _datos_firmante(self.db, "PERSONA DE PRUEBA"),
+            ("PERSONA DE PRUEBA", "12345678"),
+        )
+
+    def test_busquedas_principales_se_aplican_por_separado(self):
+        carga = CargaPatrimonial(
+            nombre_archivo="a.xlsx", huella_archivo="x" * 64,
+            usuario_carga="admin", estado="Completada",
+        )
+        self.db.add(carga)
+        self.db.flush()
+        for codigo, qr, descripcion in [
+            ("740001", "QR-100", "AUTOCLAVE GRANDE"),
+            ("740002", "QR-200", "COMPUTADORA"),
+        ]:
+            self.db.add(BienPatrimonial(
+                codigo_patrimonial=codigo, codigo_qr=qr,
+                descripcion=descripcion, nombre_dependencia="DEPENDENCIA",
+                usuario="USUARIO", valor_compra=1, valor_inicial=1,
+                ubicacion_fisica="OFICINA", valor_neto=1,
+                marca="MARCA", estado_conservacion="Bueno",
+                datos_importados="{}", datos_fuente="[]",
+                ultima_carga_id=carga.id,
+            ))
+        self.db.commit()
+
+        filtros = {
+            "codigo_patrimonial": "740001", "codigo_qr": "QR-100",
+            "descripcion": "autoclave", "q": "",
+        }
+        resultado = _aplicar_filtros(
+            self.db.query(BienPatrimonial), filtros
+        ).all()
+
+        self.assertEqual([bien.codigo_patrimonial for bien in resultado], ["740001"])
+
+        solo_prefijo_qr = _aplicar_filtros(
+            self.db.query(BienPatrimonial),
+            {
+                "codigo_patrimonial": "", "codigo_qr": "QR-1",
+                "descripcion": "", "q": "",
+            },
+        ).all()
+        self.assertEqual(solo_prefijo_qr, [])
+
+    def _validar(self, ruta, tipo_carga="Completa"):
+        carga = preparar_carga(
+            self.db, ruta, "reporte_mp.xlsx", "admin",
+            tipo_carga=tipo_carga,
+        )
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            validar_carga_patrimonial(carga.id, ruta)
+        self.db.expire_all()
+        return self.db.get(CargaPatrimonial, carga.id)
+
+    def test_valida_confirma_y_clasifica_una_carga(self):
+        carga = self._validar(self._reporte([
+            self._fila("0001", "QR-001"),
+            self._fila("0002", "QR-002"),
+        ]))
+
+        self.assertEqual(carga.estado, "Lista para confirmar")
+        self.assertEqual(carga.total_nuevos, 2)
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        self.db.expire_all()
+        carga = self.db.get(CargaPatrimonial, carga.id)
+        self.assertEqual(carga.estado, "Completada")
+        self.assertEqual(self.db.query(BienPatrimonial).count(), 2)
+        self.assertEqual(self.db.query(VersionBienPatrimonial).count(), 2)
+
+        segunda = self._validar(self._reporte([
+            self._fila("0001", "QR-001", usuario="USUARIO B"),
+        ]))
+        self.assertEqual(segunda.total_actualizados, 1)
+        self.assertEqual(segunda.total_no_incluidos, 1)
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(segunda.id)
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).filter_by(codigo_patrimonial="0001").one()
+        self.assertEqual(bien.usuario, "USUARIO B")
+        cambio = self.db.query(CambioBienPatrimonial).filter_by(campo="usuario").one()
+        self.assertEqual(cambio.valor_anterior, "USUARIO A")
+        self.assertEqual(cambio.valor_nuevo, "USUARIO B")
+        no_incluido = self.db.query(BienCargaPatrimonial).filter_by(
+            carga_id=segunda.id, codigo_patrimonial="0002"
+        ).one()
+        self.assertEqual(no_incluido.clasificacion, "No incluido")
+        self.assertIsNotNone(no_incluido.bien_id)
+
+    def test_carga_parcial_no_clasifica_ausentes_como_no_incluidos(self):
+        primera = self._validar(self._reporte([
+            self._fila("0001", "QR-001"),
+            self._fila("0002", "QR-002"),
+        ]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(primera.id)
+
+        parcial = self._validar(
+            self._reporte([self._fila("0001", "QR-001")]),
+            tipo_carga="Parcial",
+        )
+
+        self.assertEqual(parcial.tipo_carga, "Parcial")
+        self.assertEqual(parcial.total_no_incluidos, 0)
+        self.assertEqual(
+            self.db.query(BienCargaPatrimonial).filter_by(
+                carga_id=parcial.id, clasificacion="No incluido"
+            ).count(),
+            0,
+        )
+
+    def test_validacion_puede_reanudarse_desde_el_archivo_persistido(self):
+        ruta = self._reporte([self._fila("0001", "QR-001")])
+        carga = preparar_carga(
+            self.db, ruta, "reporte_mp.xlsx", "admin", tipo_carga="Completa"
+        )
+        self.assertTrue(carga.archivo_contenido)
+        os.remove(ruta)
+
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            validar_carga_patrimonial_desde_bd(carga.id)
+
+        self.db.expire_all()
+        carga = self.db.get(CargaPatrimonial, carga.id)
+        self.assertEqual(carga.estado, "Lista para confirmar")
+        self.assertEqual(carga.progreso, 100)
+        self.assertIsNone(carga.archivo_contenido)
+
+    def test_exportacion_configurable_se_genera_y_conserva_en_base(self):
+        carga = self._validar(self._reporte([self._fila("0001", "QR-001")]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        exportacion = ExportacionPatrimonial(
+            usuario="admin",
+            estado="Pendiente",
+            progreso=0,
+            tipo_reporte="Resumen personalizado",
+            columnas=json.dumps([
+                "codigo_patrimonial", "descripcion", "nombre_dependencia"
+            ]),
+            filtros=json.dumps({"descripcion": "autoclave"}),
+        )
+        self.db.add(exportacion)
+        self.db.commit()
+
+        with patch("app.routers.maestro_patrimonial.SessionLocal", self.factory):
+            generar_exportacion_patrimonial(exportacion.id)
+
+        self.db.expire_all()
+        exportacion = self.db.get(ExportacionPatrimonial, exportacion.id)
+        self.assertEqual(exportacion.estado, "Completada")
+        self.assertEqual(exportacion.progreso, 100)
+        self.assertEqual(exportacion.total_filas, 1)
+        libro = load_workbook(io.BytesIO(exportacion.archivo_contenido))
+        self.assertEqual(
+            [celda.value for celda in libro["Bienes"][1]],
+            ["Código patrimonial", "Descripción", "Dependencia"],
+        )
+        self.assertGreater(libro["Bienes"].column_dimensions["B"].width, 20)
+        libro.close()
+
+    def test_panel_calidad_detecta_qr_faltantes_y_repetidos(self):
+        carga = self._validar(self._reporte([
+            self._fila("0001", "QR-001"),
+            self._fila("0002", "QR-001"),
+            self._fila("0003", None),
+        ]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+
+        resumen = _resumen_calidad_datos(self.db)
+
+        self.assertEqual(resumen["sin_qr_total"], 1)
+        self.assertEqual(resumen["duplicados_total"], 1)
+
+    def test_rechaza_obligatorio_vacio_pero_qr_repetido_es_alerta(self):
+        fila_vacia = self._fila("0001", "QR-001")
+        fila_vacia[3] = None
+        carga = self._validar(self._reporte([
+            fila_vacia,
+            self._fila("0002", "QR-001"),
+            self._fila("0003", "QR-001"),
+        ]))
+
+        self.assertEqual(carga.estado, "Rechazada")
+        self.assertEqual(carga.total_errores, 1)
+        self.assertEqual(carga.total_alertas, 1)
+        detalle = json.loads(carga.detalle_validacion)
+        self.assertTrue(any(e["campo"] == "Dependencia" for e in detalle))
+        alertas = json.loads(carga.detalle_alertas)
+        self.assertEqual(alertas[0]["qr"], "QR-001")
+        self.assertEqual(self.db.query(BienCargaPatrimonial).count(), 0)
+
+    def test_numero_orden_puede_estar_vacio(self):
+        fila = self._fila("0001", "QR-001")
+        fila[19] = None
+
+        carga = self._validar(self._reporte([fila]))
+
+        self.assertEqual(carga.estado, "Lista para confirmar")
+        self.assertEqual(carga.total_errores, 0)
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).one()
+        self.assertIsNone(bien.numero_orden)
+
+    def test_fecha_alta_puede_estar_vacia(self):
+        fila = self._fila("0001", "QR-001")
+        fila[9] = None
+
+        carga = self._validar(self._reporte([fila]))
+
+        self.assertEqual(carga.estado, "Lista para confirmar")
+        self.assertEqual(carga.total_errores, 0)
+
+    def test_qr_repetido_permite_confirmar_y_genera_alerta(self):
+        carga = self._validar(self._reporte([
+            self._fila("0001", "QR-001"),
+            self._fila("0002", "QR-001"),
+        ]))
+
+        self.assertEqual(carga.estado, "Lista para confirmar")
+        self.assertEqual(carga.total_errores, 0)
+        self.assertEqual(carga.total_alertas, 1)
+        self.assertEqual(carga.total_nuevos, 2)
+        alerta = json.loads(carga.detalle_alertas)[0]
+        self.assertEqual(alerta["codigos"], ["0001", "0002"])
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        self.db.expire_all()
+        self.assertEqual(
+            self.db.query(BienPatrimonial).filter_by(codigo_qr="QR-001").count(),
+            2,
+        )
+
+    def test_qr_numerico_elimina_ceros_iniciales_y_se_busca_normalizado(self):
+        carga = self._validar(self._reporte([
+            self._fila("0001", "00000054"),
+        ]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        self.db.expire_all()
+
+        bien = self.db.query(BienPatrimonial).one()
+        self.assertEqual(bien.codigo_qr, "54")
+        resultado = _aplicar_filtros(
+            self.db.query(BienPatrimonial),
+            {
+                "codigo_patrimonial": "", "codigo_qr": "00000054",
+                "descripcion": "", "q": "",
+            },
+        ).all()
+        self.assertEqual([item.id for item in resultado], [bien.id])
+
+    def test_genera_ficha_pdf_sin_incluir_la_importacion(self):
+        carga = self._validar(self._reporte([
+            self._fila("0001", "00000054"),
+        ]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).one()
+
+        contenido = generar_ficha_activo_pdf(
+            bien, [], [], list(bien.versiones),
+        )
+
+        self.assertTrue(contenido.startswith(b"%PDF-"))
+        self.assertGreater(len(contenido), 3000)
+
+    def test_edicion_exige_motivo_y_guarda_correccion(self):
+        datos = {
+            "codigo_patrimonial": "0001", "codigo_qr": "QR-001",
+            "descripcion": "AUTOCLAVE", "nombre_dependencia": "DEPENDENCIA",
+            "usuario": "USUARIO A", "fecha_compra": None,
+            "valor_compra": "100", "fecha_alta": "2026-01-10",
+            "valor_inicial": "100", "ubicacion_fisica": "LABORATORIO",
+            "modelo": None, "numero_orden": "1", "medidas": None,
+            "valor_neto": "80", "numero_documento": None, "marca": "MARCA",
+            "estado_conservacion": "Bueno", "fecha_nea": None,
+            "numero_serie": None, "color": None, "caracteristicas": None,
+            "observaciones": None,
+        }
+        carga = CargaPatrimonial(
+            nombre_archivo="a.xlsx", huella_archivo="x" * 64,
+            usuario_carga="admin", estado="Completada",
+        )
+        self.db.add(carga)
+        self.db.flush()
+        bien = BienPatrimonial(
+            codigo_patrimonial="0001", codigo_qr="QR-001",
+            descripcion="AUTOCLAVE", nombre_dependencia="DEPENDENCIA",
+            usuario="USUARIO A", valor_compra=100,
+            fecha_alta=date(2026, 1, 10), valor_inicial=100,
+            ubicacion_fisica="LABORATORIO", numero_orden="1", valor_neto=80,
+            marca="MARCA", estado_conservacion="Bueno",
+            datos_importados=json.dumps(datos), datos_fuente="[]",
+            ultima_carga_id=carga.id,
+        )
+        self.db.add(bien)
+        self.db.commit()
+        valores = {campo: getattr(bien, campo) for campo in CAMPOS_EDITABLES}
+        valores["usuario"] = "USUARIO CORREGIDO"
+
+        with self.assertRaisesRegex(ValueError, "motivo"):
+            editar_bien_patrimonial(self.db, bien, valores, "", "admin")
+        cantidad = editar_bien_patrimonial(
+            self.db, bien, valores, "Corrección verificada", "admin"
+        )
+
+        self.assertEqual(cantidad, 1)
+        self.assertEqual(bien.usuario, "USUARIO CORREGIDO")
+        correccion = self.db.query(CorreccionBienPatrimonial).one()
+        self.assertEqual(correccion.motivo, "Corrección verificada")
+        self.assertEqual(correccion.activa, 1)
+
+    def test_nueva_carga_no_pisa_correccion_manual_y_crea_conflicto(self):
+        primera = self._validar(self._reporte([self._fila()]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(primera.id)
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).one()
+        valores = {campo: getattr(bien, campo) for campo in CAMPOS_EDITABLES}
+        valores["descripcion"] = "AUTOCLAVE CORREGIDO MANUALMENTE"
+        editar_bien_patrimonial(
+            self.db, bien, valores, "Corrección documental", "admin"
+        )
+
+        fila_nueva = self._fila()
+        fila_nueva[1] = "AUTOCLAVE ACTUALIZADO EN SIGA"
+        segunda = self._validar(self._reporte([fila_nueva]))
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(segunda.id)
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).one()
+        conflicto = self.db.query(ConflictoBienPatrimonial).one()
+        self.assertEqual(bien.descripcion, "AUTOCLAVE CORREGIDO MANUALMENTE")
+        self.assertEqual(conflicto.estado, "Pendiente")
+        self.assertEqual(conflicto.valor_siga_nuevo, "AUTOCLAVE ACTUALIZADO EN SIGA")
+
+        resolver_conflicto(self.db, conflicto, "siga", "admin")
+        self.db.expire_all()
+        bien = self.db.query(BienPatrimonial).one()
+        self.assertEqual(bien.descripcion, "AUTOCLAVE ACTUALIZADO EN SIGA")
+        self.assertEqual(
+            self.db.query(CorreccionBienPatrimonial).one().activa, 0
+        )
 
 
 if __name__ == "__main__":

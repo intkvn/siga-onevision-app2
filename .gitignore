@@ -6,6 +6,9 @@ local_dev.db
 *.db
 *.sqlite
 backups/
+Reportes/
+*.xlsx
+*.xls
 
 # Entorno y archivos generados por Python.
 .venv/

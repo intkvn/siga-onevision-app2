@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% from "_paginacion.html" import mostrar_paginacion %}
+{% block titulo %}Control Impresión{% endblock %}
+{% block contenido %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Control Impresión</h2>
+        <p class="text-muted mb-0">Inventario anual y seguimiento de stickers por RED, establecimiento y área.</p>
+    </div>
+    {% if inventario %}
+    <span class="badge text-bg-dark fs-6">{{ inventario.nombre }}</span>
+    {% endif %}
+</div>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+{% if request.query_params.get("info") %}
+<div class="alert alert-success">{{ request.query_params.get("info") }}</div>
+{% endif %}
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Cargar o actualizar reporte general</h5>
+        <p class="text-muted small">
+            La actualización conserva los lotes y las impresiones confirmadas. Los bienes que ya no aparezcan quedan inactivos, sin eliminar su historial.
+        </p>
+        <form method="post" action="/control-impresion/importar" enctype="multipart/form-data" class="row g-3 align-items-end" id="form-importar-inventario">
+            <div class="col-md-2">
+                <label class="form-label">Año</label>
+                <input class="form-control" type="text" name="anio" maxlength="4" value="{{ inventario.anio if inventario else anio_predeterminado }}" required>
+            </div>
+            <div class="col-md-7">
+                <label class="form-label">Reporte One Vision - Impresión QR</label>
+                <input class="form-control" type="file" name="archivo" accept=".xlsx" required>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-primary w-100" type="submit" id="boton-importar">Importar / actualizar</button>
+            </div>
+            <div class="col-12 d-none" id="estado-importacion">
+                <div class="alert alert-info mb-0">Procesando el reporte. Esta operación puede tardar algunos minutos.</div>
+            </div>
+        </form>
+        {% if inventario %}
+        <div class="small text-muted mt-3">
+            Último archivo: {{ inventario.archivo_ultimo or "-" }} ·
+            Actualizado: {{ inventario.actualizado_en.strftime("%d/%m/%Y %H:%M") if inventario.actualizado_en else "-" }} ·
+            {{ inventario.total_registros }} bienes activos
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+{% if inventario %}
+<form method="get" action="/control-impresion" class="card card-body mb-4">
+    <input type="hidden" name="inventario_id" value="{{ inventario.id }}">
+    <div class="row g-2">
+        <div class="col-md-3">
+            <label class="form-label">RED</label>
+            <select class="form-select filtro-buscable" id="filtro-red" name="red" data-campo="red" data-placeholder="Todas las RED">
+                <option value="">Todas las RED</option>
+                {% if filtros.red %}<option value="{{ filtros.red }}" selected>{{ "Sin dato" if filtros.red == "__SIN_DATO__" else filtros.red }}</option>{% endif %}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Establecimiento</label>
+            <select class="form-select filtro-buscable" id="filtro-establecimiento" name="establecimiento" data-campo="establecimiento" data-placeholder="Todos los establecimientos">
+                <option value="">Todos los establecimientos</option>
+                {% if filtros.establecimiento %}<option value="{{ filtros.establecimiento }}" selected>{{ "Sin dato" if filtros.establecimiento == "__SIN_DATO__" else filtros.establecimiento }}</option>{% endif %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Área</label>
+            <select class="form-select filtro-buscable" id="filtro-area" name="area" data-campo="area" data-placeholder="Todas las áreas">
+                <option value="">Todas las áreas</option>
+                {% if filtros.area %}<option value="{{ filtros.area }}" selected>{{ "Sin dato" if filtros.area == "__SIN_DATO__" else filtros.area }}</option>{% endif %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Estado</label>
+            <select class="form-select" name="estado">
+                <option value="">Todos los estados</option>
+                {% for valor in estados %}
+                <option value="{{ valor }}" {{ "selected" if filtros.estado == valor else "" }}>{{ valor }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Buscar</label>
+            <input class="form-control" type="search" name="q" value="{{ filtros.q }}" placeholder="QR o patrimonial">
+        </div>
+    </div>
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Aplicar filtros</button>
+        <a class="btn btn-outline-secondary" href="/control-impresion?inventario_id={{ inventario.id }}">Limpiar</a>
+    </div>
+</form>
+
+<div class="row g-3 mb-4">
+    {% for titulo, clave, estilo in [
+        ("Bienes filtrados", "total", "dark"),
+        ("Pendientes", "Pendiente", "secondary"),
+        ("Sticker generado", "Sticker generado", "primary"),
+        ("Impresos", "Impreso", "success"),
+        ("Bloqueados", "Bloqueado", "danger")
+    ] %}
+    <div class="col-6 col-lg">
+        <div class="card h-100 border-{{ estilo }}">
+            <div class="card-body text-center">
+                <div class="display-6">{{ resumen[clave] }}</div>
+                <div class="text-muted">{{ titulo }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <div>
+                <h5 class="card-title mb-1">Bienes del inventario</h5>
+                <div class="text-muted small">Máximo {{ max_bienes_lote }} bienes por lote de impresión.</div>
+            </div>
+        </div>
+        <form method="post" action="/control-impresion/lotes" id="form-crear-lote">
+            <input type="hidden" name="inventario_id" value="{{ inventario.id }}">
+            <input type="hidden" name="red" value="{{ filtros.red }}">
+            <input type="hidden" name="establecimiento" value="{{ filtros.establecimiento }}">
+            <input type="hidden" name="area" value="{{ filtros.area }}">
+            <input type="hidden" name="estado" value="{{ filtros.estado }}">
+            <input type="hidden" name="q" value="{{ filtros.q }}">
+            <div class="table-responsive" style="max-height: 560px;">
+                <table class="table table-sm table-hover align-middle bg-white">
+                    <thead class="sticky-top bg-white">
+                        <tr>
+                            <th><input class="form-check-input" type="checkbox" id="seleccionar-pagina" aria-label="Seleccionar página"></th>
+                            <th>Cód. patrimonial</th>
+                            <th>Cód. QR</th>
+                            <th>Bien</th>
+                            <th>RED</th>
+                            <th>Establecimiento</th>
+                            <th>Área</th>
+                            <th>Lote alta</th>
+                            <th>Estado</th>
+                            <th>Última impresión</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for fila in bienes %}
+                        {% set bien = fila.bien %}
+                        <tr>
+                            <td><input class="form-check-input seleccion-bien" type="checkbox" name="bien_ids" value="{{ bien.id }}"></td>
+                            <td>{{ bien.codigo_patrimonial }}</td>
+                            <td>{{ bien.codigo_qr or "-" }}</td>
+                            <td>{{ bien.descripcion }}</td>
+                            <td>{{ bien.red or "Sin RED" }}</td>
+                            <td>{{ bien.establecimiento or "Sin establecimiento" }}</td>
+                            <td>{{ bien.area or "Sin área" }}</td>
+                            <td>
+                                {% if bien.bien_alta %}
+                                    #{{ bien.bien_alta.lote_id or "-" }}
+                                {% else %}
+                                    <span class="text-muted">{{ bien.relacion_alta }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% set clase = {"Pendiente":"secondary", "Sticker generado":"primary", "Impreso":"success", "Bloqueado":"danger"}.get(fila.estado, "secondary") %}
+                                <span class="badge text-bg-{{ clase }}">{{ fila.estado }}</span>
+                                {% if fila.estado == "Bloqueado" %}<div class="small text-danger">{{ bien.motivo_bloqueo }}</div>{% endif %}
+                            </td>
+                            <td>{{ fila.ultima_impresion.strftime("%d/%m/%Y %H:%M") if fila.ultima_impresion else "-" }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="10" class="text-center text-muted py-4">No hay bienes con estos filtros.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {{ mostrar_paginacion(url_base, pagina, total_paginas, paginas, inicio, fin, total, "bienes") }}
+            {% if total %}
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-primary" type="submit" name="alcance" value="seleccionados">Preparar lote con seleccionados</button>
+                <button class="btn btn-outline-primary" type="submit" name="alcance" value="filtrados">Preparar lote con los {{ total }} filtrados</button>
+            </div>
+            {% endif %}
+        </form>
+    </div>
+</section>
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Avance por establecimiento</h5>
+        <div class="table-responsive" style="max-height: 460px;">
+            <table class="table table-sm table-hover align-middle">
+                <thead class="sticky-top bg-white"><tr><th>RED</th><th>Establecimiento</th><th>Total</th><th>Pendientes</th><th>Generados</th><th>Impresos</th><th>Bloqueados</th><th>Avance</th><th>Estado</th></tr></thead>
+                <tbody>
+                {% for fila in resumen_establecimientos %}
+                    <tr>
+                        <td>{{ fila.red }}</td>
+                        <td>{{ fila.establecimiento }}</td>
+                        <td>{{ fila.total }}</td>
+                        <td>{{ fila.pendientes }}</td>
+                        <td>{{ fila.generados }}</td>
+                        <td>{{ fila.impresos }}</td>
+                        <td>{{ fila.bloqueados }}</td>
+                        <td style="min-width: 150px;">
+                            <div class="progress" role="progressbar" aria-label="Avance" aria-valuenow="{{ fila.porcentaje }}" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-bar bg-success" style="width: {{ fila.porcentaje }}%">{{ fila.porcentaje }}%</div>
+                            </div>
+                        </td>
+                        <td><span class="badge text-bg-{{ 'success' if fila.completo else 'warning' }}">{{ "Completo" if fila.completo else "Pendiente" }}</span></td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="9" class="text-center text-muted">Sin datos.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-body">
+        <h5 class="card-title">Últimos lotes de impresión</h5>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Lote</th><th>Creado</th><th>Bienes</th><th>PDF generado</th><th>Estado</th><th></th></tr></thead>
+                <tbody>
+                {% for lote in lotes %}
+                    <tr>
+                        <td>#{{ lote.id }}</td>
+                        <td>{{ lote.creado_en.strftime("%d/%m/%Y %H:%M") }}</td>
+                        <td>{{ lote.total_bienes }}</td>
+                        <td>{{ lote.pdf_generado_en.strftime("%d/%m/%Y %H:%M") if lote.pdf_generado_en else "-" }}</td>
+                        <td>{{ lote.estado }}</td>
+                        <td><a class="btn btn-sm btn-outline-primary" href="/control-impresion/lotes/{{ lote.id }}">Abrir</a></td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="6" class="text-center text-muted">Todavía no hay lotes.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<script>
+(function () {
+    const formularioImportacion = document.getElementById("form-importar-inventario");
+    if (formularioImportacion) {
+        formularioImportacion.addEventListener("submit", function () {
+            document.getElementById("boton-importar").disabled = true;
+            document.getElementById("boton-importar").textContent = "Procesando...";
+            document.getElementById("estado-importacion").classList.remove("d-none");
+        });
+    }
+
+    const seleccionar = document.getElementById("seleccionar-pagina");
+    if (seleccionar) {
+        const checks = Array.from(document.querySelectorAll(".seleccion-bien"));
+        seleccionar.addEventListener("change", function () {
+            checks.forEach(check => { check.checked = seleccionar.checked; });
+        });
+    }
+})();
+</script>
+{% if inventario %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+(function () {
+    const inventarioId = {{ inventario.id }};
+    const elementos = {
+        red: document.getElementById("filtro-red"),
+        establecimiento: document.getElementById("filtro-establecimiento"),
+        area: document.getElementById("filtro-area")
+    };
+    const controles = {};
+
+    function valor(nombre) {
+        return controles[nombre] ? controles[nombre].getValue() : elementos[nombre].value;
+    }
+
+    function crearControl(nombre) {
+        const elemento = elementos[nombre];
+        controles[nombre] = new TomSelect(elemento, {
+            valueField: "value",
+            labelField: "label",
+            searchField: "label",
+            maxItems: 1,
+            allowEmptyOption: true,
+            preload: true,
+            loadThrottle: 250,
+            placeholder: elemento.dataset.placeholder,
+            load: function (query, callback) {
+                const parametros = new URLSearchParams({
+                    inventario_id: inventarioId,
+                    campo: nombre,
+                    q: query
+                });
+                if (nombre === "establecimiento" || nombre === "area") {
+                    parametros.set("red", valor("red"));
+                }
+                if (nombre === "area") {
+                    parametros.set("establecimiento", valor("establecimiento"));
+                }
+                fetch(`/control-impresion/opciones?${parametros.toString()}`)
+                    .then(respuesta => {
+                        if (!respuesta.ok) throw new Error("No se pudieron cargar las opciones");
+                        return respuesta.json();
+                    })
+                    .then(datos => callback(datos.options))
+                    .catch(() => callback());
+            }
+        });
+    }
+
+    crearControl("red");
+    crearControl("establecimiento");
+    crearControl("area");
+
+    controles.red.on("change", function () {
+        controles.establecimiento.clear(true);
+        controles.establecimiento.clearOptions();
+        controles.establecimiento.load("");
+        controles.area.clear(true);
+        controles.area.clearOptions();
+        controles.area.load("");
+    });
+    controles.establecimiento.on("change", function () {
+        controles.area.clear(true);
+        controles.area.clearOptions();
+        controles.area.load("");
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

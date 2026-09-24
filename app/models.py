@@ -8,7 +8,8 @@ LoteCarga agrupa un envío de normalización/carga a One Visión.
 """
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Date, DateTime, Float, ForeignKey, Text, UniqueConstraint
+    Column, Integer, String, Date, DateTime, Float, ForeignKey, Index, Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -100,6 +101,132 @@ class PerfilImpresionEtiqueta(Base):
     anio_1 = Column(String(4), nullable=False, default="2026")
     anio_2 = Column(String(4), nullable=False, default="2027")
     anio_marcado = Column(String(4), nullable=False, default="2026")
+
+
+class InventarioImpresion(Base):
+    """Campaña anual que contiene el universo de bienes a etiquetar."""
+    __tablename__ = "inventarios_impresion"
+
+    id = Column(Integer, primary_key=True)
+    nombre = Column(String(150), nullable=False)
+    anio = Column(String(4), nullable=False, index=True)
+    unidad_ejecutora = Column(String(100), nullable=False, default="DIRESA")
+    archivo_ultimo = Column(String(300), nullable=True)
+    total_registros = Column(Integer, nullable=False, default=0)
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    actualizado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bienes = relationship(
+        "BienInventarioImpresion", back_populates="inventario",
+        cascade="all, delete-orphan",
+    )
+    lotes = relationship(
+        "LoteImpresionInventario", back_populates="inventario",
+        cascade="all, delete-orphan",
+    )
+
+
+class BienInventarioImpresion(Base):
+    """Bien del reporte general de One Vision para una campaña anual."""
+    __tablename__ = "bienes_inventario_impresion"
+    __table_args__ = (
+        UniqueConstraint(
+            "inventario_id", "codigo_patrimonial",
+            name="uq_bien_inventario_codigo",
+        ),
+        Index(
+            "ix_bien_inventario_estado",
+            "inventario_id", "activo", "estado_impresion",
+        ),
+        Index(
+            "ix_bien_inventario_red",
+            "inventario_id", "activo", "red",
+        ),
+        Index(
+            "ix_bien_inventario_establecimiento",
+            "inventario_id", "activo", "establecimiento",
+        ),
+        Index(
+            "ix_bien_inventario_area",
+            "inventario_id", "activo", "area",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    inventario_id = Column(
+        Integer, ForeignKey("inventarios_impresion.id"), nullable=False, index=True,
+    )
+    bien_alta_id = Column(Integer, ForeignKey("bienes_alta.id"), nullable=True, index=True)
+    codigo_patrimonial = Column(String(30), nullable=False, index=True)
+    codigo_qr = Column(String(50), nullable=True, index=True)
+    ruta_qr = Column(String(500), nullable=True)
+    descripcion = Column(String(500), nullable=False)
+    establecimiento = Column(String(300), nullable=True, index=True)
+    red = Column(String(250), nullable=True, index=True)
+    area = Column(String(300), nullable=True, index=True)
+    marca = Column(String(150), nullable=True)
+    modelo = Column(String(200), nullable=True)
+    color = Column(String(100), nullable=True)
+    nro_serie = Column(String(150), nullable=True)
+    activo = Column(Integer, nullable=False, default=1, index=True)
+    imprimible = Column(Integer, nullable=False, default=1, index=True)
+    motivo_bloqueo = Column(String(300), nullable=True)
+    estado_impresion = Column(
+        String(30), nullable=False, default="Pendiente", index=True,
+    )
+    sticker_generado_en = Column(DateTime, nullable=True)
+    impreso_en = Column(DateTime, nullable=True, index=True)
+    relacion_alta = Column(String(30), nullable=False, default="Sin alta")
+    importado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    actualizado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    inventario = relationship("InventarioImpresion", back_populates="bienes")
+    bien_alta = relationship("BienAlta")
+    items_impresion = relationship(
+        "ItemLoteImpresionInventario", back_populates="bien",
+        cascade="all, delete-orphan",
+    )
+
+
+class LoteImpresionInventario(Base):
+    """Selección congelada de bienes de inventario para una impresión."""
+    __tablename__ = "lotes_impresion_inventario"
+
+    id = Column(Integer, primary_key=True)
+    inventario_id = Column(
+        Integer, ForeignKey("inventarios_impresion.id"), nullable=False, index=True,
+    )
+    creado_en = Column(DateTime, default=datetime.utcnow, nullable=False)
+    pdf_generado_en = Column(DateTime, nullable=True)
+    estado = Column(String(30), nullable=False, default="Preparado", index=True)
+    filtros = Column(Text, nullable=True)
+    total_bienes = Column(Integer, nullable=False, default=0)
+
+    inventario = relationship("InventarioImpresion", back_populates="lotes")
+    items = relationship(
+        "ItemLoteImpresionInventario", back_populates="lote",
+        cascade="all, delete-orphan",
+    )
+
+
+class ItemLoteImpresionInventario(Base):
+    """Bien incluido en un lote y confirmación de su impresión física."""
+    __tablename__ = "items_lote_impresion_inventario"
+    __table_args__ = (
+        UniqueConstraint("lote_id", "bien_id", name="uq_lote_impresion_bien"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    lote_id = Column(
+        Integer, ForeignKey("lotes_impresion_inventario.id"), nullable=False, index=True,
+    )
+    bien_id = Column(
+        Integer, ForeignKey("bienes_inventario_impresion.id"), nullable=False, index=True,
+    )
+    impreso_en = Column(DateTime, nullable=True, index=True)
+
+    lote = relationship("LoteImpresionInventario", back_populates="items")
+    bien = relationship("BienInventarioImpresion", back_populates="items_impresion")
 
 
 class RelacionPecosaItem(Base):

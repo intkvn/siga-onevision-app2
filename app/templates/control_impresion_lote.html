@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block titulo %}Lote de impresión #{{ lote.id }}{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Lote de impresión #{{ lote.id }}</h2>
+        <p class="text-muted mb-0">{{ lote.inventario.nombre }} · {{ lote.total_bienes }} bienes</p>
+    </div>
+    <span class="badge text-bg-dark fs-6">{{ lote.estado }}</span>
+</div>
+
+{% if request.query_params.get("error") %}
+<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>
+{% endif %}
+{% if request.query_params.get("info") %}
+<div class="alert alert-success">{{ request.query_params.get("info") }}</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card card-body text-center"><div class="display-6">{{ lote.total_bienes }}</div><div class="text-muted">Bienes</div></div></div>
+    <div class="col-md-3"><div class="card card-body text-center"><div class="display-6 text-success">{{ impresos }}</div><div class="text-muted">Impresos</div></div></div>
+    <div class="col-md-3"><div class="card card-body text-center"><div class="display-6 text-secondary">{{ pendientes }}</div><div class="text-muted">Por confirmar</div></div></div>
+    <div class="col-md-3"><div class="card card-body text-center"><div class="fw-semibold">{{ lote.pdf_generado_en.strftime("%d/%m/%Y %H:%M") if lote.pdf_generado_en else "Pendiente" }}</div><div class="text-muted mt-2">PDF generado</div></div></div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <a class="btn btn-primary" href="/control-impresion/lotes/{{ lote.id }}/pdf" target="_blank">Generar / abrir PDF</a>
+    <a class="btn btn-success" href="/control-impresion/lotes/{{ lote.id }}/excel">Descargar Excel de control</a>
+    <a class="btn btn-outline-secondary" href="/control-impresion?inventario_id={{ lote.inventario_id }}">Volver al inventario</a>
+</div>
+
+{% if not lote.pdf_generado_en %}
+<div class="alert alert-warning">Abre el PDF antes de confirmar la impresión física.</div>
+{% endif %}
+
+<form method="post" action="/control-impresion/lotes/{{ lote.id }}/confirmar">
+    <div class="card mb-3">
+        <div class="card-body p-0">
+            <div class="table-responsive" style="max-height: 600px;">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="sticky-top bg-white">
+                        <tr>
+                            <th class="ps-3"><input class="form-check-input" id="seleccionar-items" type="checkbox" aria-label="Seleccionar todos"></th>
+                            <th>Cód. patrimonial</th>
+                            <th>Cód. QR</th>
+                            <th>Bien</th>
+                            <th>RED</th>
+                            <th>Establecimiento</th>
+                            <th>Área</th>
+                            <th>Lote alta</th>
+                            <th>Impresión</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for item in lote.items %}
+                        {% set bien = item.bien %}
+                        <tr>
+                            <td class="ps-3"><input class="form-check-input item-lote" type="checkbox" name="item_ids" value="{{ item.id }}" {{ "disabled" if item.impreso_en else "" }}></td>
+                            <td>{{ bien.codigo_patrimonial }}</td>
+                            <td>{{ bien.codigo_qr or "-" }}</td>
+                            <td>{{ bien.descripcion }}</td>
+                            <td>{{ bien.red or "Sin RED" }}</td>
+                            <td>{{ bien.establecimiento or "Sin establecimiento" }}</td>
+                            <td>{{ bien.area or "Sin área" }}</td>
+                            <td>{{ "#" ~ bien.bien_alta.lote_id if bien.bien_alta and bien.bien_alta.lote_id else bien.relacion_alta }}</td>
+                            <td>
+                                {% if item.impreso_en %}
+                                <span class="badge text-bg-success">Impreso</span>
+                                <div class="small text-muted">{{ item.impreso_en.strftime("%d/%m/%Y %H:%M") }}</div>
+                                {% else %}
+                                <span class="badge text-bg-secondary">Pendiente</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% if pendientes %}
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-success" type="submit" name="alcance" value="seleccionados">Confirmar seleccionados</button>
+        <button class="btn btn-outline-success" type="submit" name="alcance" value="todo">Confirmar todo el lote como impreso</button>
+    </div>
+    {% endif %}
+</form>
+
+<script>
+(function () {
+    const seleccionar = document.getElementById("seleccionar-items");
+    if (!seleccionar) return;
+    const checks = Array.from(document.querySelectorAll(".item-lote:not(:disabled)"));
+    seleccionar.addEventListener("change", function () {
+        checks.forEach(check => { check.checked = seleccionar.checked; });
+    });
+})();
+</script>
+{% endblock %}

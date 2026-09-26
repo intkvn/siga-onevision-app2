@@ -14,21 +14,29 @@ from fastapi.templating import Jinja2Templates
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy import case, func, or_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.auth import requiere_login
+from app.auth import requiere_administrador
 from app.config import ANIO_INVENTARIO
 from app.database import get_db
 from app.models import (
     BienInventarioImpresion,
+    CargaInventarioImpresion,
     InventarioImpresion,
     ItemLoteImpresionInventario,
+    ItemSolicitudImpresionInventario,
     LoteImpresionInventario,
+    SolicitudImpresionInventario,
 )
 from app.routers.impresion import _obtener_perfil_impresion
 from app.services.excel_inventario_impresion import importar_reporte_inventario
 from app.services.pagination import paginas_visibles, rango_registros
 from app.services.pdf_etiquetas import clasificar_bienes_impresion, generar_pdf_etiquetas
+from app.services.solicitudes_impresion import (
+    ESTADO_SINCRONIZACION,
+    actualizar_estado_solicitud,
+)
 
 
 router = APIRouter()
@@ -54,6 +62,7 @@ def _aplicar_filtros(
     establecimiento: str = "",
     area: str = "",
     estado: str = "",
+    tipo_bien: str = "",
     q: str = "",
 ):
     consulta = consulta.filter(
@@ -67,6 +76,8 @@ def _aplicar_filtros(
     consulta = _filtrar_valor(consulta, BienInventarioImpresion.area, area)
     if estado:
         consulta = consulta.filter(BienInventarioImpresion.estado_impresion == estado)
+    if tipo_bien:
+        consulta = consulta.filter(BienInventarioImpresion.tipo_bien == tipo_bien)
     q = q.strip()
     if q:
         condiciones = [
@@ -149,16 +160,17 @@ def _marcar_pdf_generado(db: Session, lote: LoteImpresionInventario):
 
 
 def _confirmar_items_impresos(db: Session, lote, consulta) -> int:
-    pendientes_consulta = consulta.filter(
+    pendientes_items = consulta.filter(
         ItemLoteImpresionInventario.impreso_en.is_(None)
-    )
-    ids_bienes = [fila[0] for fila in pendientes_consulta.with_entities(
-        ItemLoteImpresionInventario.bien_id
-    ).all()]
+    ).all()
+    ids_bienes = [item.bien_id for item in pendientes_items]
+    ids_solicitud = [
+        item.solicitud_item_id for item in pendientes_items
+        if item.solicitud_item_id is not None
+    ]
     ahora = datetime.utcnow()
-    actualizados = pendientes_consulta.update(
-        {ItemLoteImpresionInventario.impreso_en: ahora}, synchronize_session=False
-    )
+    for item in pendientes_items:
+        item.impreso_en = ahora
     if ids_bienes:
         db.query(BienInventarioImpresion).filter(
             BienInventarioImpresion.id.in_(ids_bienes)
@@ -166,13 +178,28 @@ def _confirmar_items_impresos(db: Session, lote, consulta) -> int:
             BienInventarioImpresion.estado_impresion: "Impreso",
             BienInventarioImpresion.impreso_en: ahora,
         }, synchronize_session=False)
+    solicitudes_afectadas = set()
+    if ids_solicitud:
+        items_solicitud = db.query(ItemSolicitudImpresionInventario).filter(
+            ItemSolicitudImpresionInventario.id.in_(ids_solicitud)
+        ).all()
+        for item in items_solicitud:
+            item.estado = "Listo para recojo"
+            item.listo_recojo_en = ahora
+            solicitudes_afectadas.add(item.solicitud_id)
+        db.flush()
+        for solicitud_id in solicitudes_afectadas:
+            actualizar_estado_solicitud(
+                db.get(SolicitudImpresionInventario, solicitud_id)
+            )
+    db.flush()
     pendientes = db.query(ItemLoteImpresionInventario).filter(
         ItemLoteImpresionInventario.lote_id == lote.id,
         ItemLoteImpresionInventario.impreso_en.is_(None),
     ).count()
     lote.estado = "Impreso" if pendientes == 0 else "Impreso parcial"
     db.commit()
-    return actualizados
+    return len(pendientes_items)
 
 
 def _resumen_establecimientos(consulta):
@@ -222,7 +249,7 @@ def opciones_filtro_impresion(
     red: str = "",
     establecimiento: str = "",
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     columnas = {
         "red": BienInventarioImpresion.red,
@@ -252,10 +279,11 @@ def control_impresion(
     establecimiento: str = "",
     area: str = "",
     estado: str = "",
+    tipo_bien: str = "",
     q: str = "",
     pagina: int = 1,
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     inventarios = db.query(InventarioImpresion).order_by(
         InventarioImpresion.anio.desc(), InventarioImpresion.id.desc()
@@ -278,6 +306,7 @@ def control_impresion(
             "establecimiento": establecimiento,
             "area": area,
             "estado": estado,
+            "tipo_bien": tipo_bien,
             "q": q,
         },
         "bienes": [],
@@ -286,6 +315,10 @@ def control_impresion(
         )},
         "resumen_establecimientos": [],
         "lotes": [],
+        "cargas_reportes": [],
+        "tipos": {"Activo fijo": 0, "Sobrante": 0},
+        "solicitudes_pendientes": 0,
+        "solicitudes_sincronizacion": 0,
         "pagina": 1,
         "total_paginas": 1,
         "paginas": [1],
@@ -299,7 +332,8 @@ def control_impresion(
 
     base = _aplicar_filtros(
         db.query(BienInventarioImpresion), inventario.id,
-        red=red, establecimiento=establecimiento, area=area, estado=estado, q=q,
+        red=red, establecimiento=establecimiento, area=area, estado=estado,
+        tipo_bien=tipo_bien, q=q,
     )
     total = base.count()
     total_paginas = max(1, math.ceil(total / FILAS_POR_PAGINA))
@@ -345,6 +379,7 @@ def control_impresion(
         "establecimiento": establecimiento,
         "area": area,
         "estado": estado,
+        "tipo_bien": tipo_bien,
         "q": q,
     }
     url_base = "/control-impresion?" + urlencode(
@@ -354,12 +389,41 @@ def control_impresion(
     contexto.update({
         "bienes": filas_bienes,
         "resumen": {"total": total, **conteos},
+        "tipos": {
+            **{"Activo fijo": 0, "Sobrante": 0},
+            **dict(
+                base.with_entities(
+                    BienInventarioImpresion.tipo_bien,
+                    func.count(BienInventarioImpresion.id),
+                ).group_by(BienInventarioImpresion.tipo_bien).all()
+            ),
+        },
+        "solicitudes_pendientes": db.query(
+            ItemSolicitudImpresionInventario
+        ).filter(
+            ItemSolicitudImpresionInventario.estado == "Pendiente"
+        ).count(),
+        "solicitudes_sincronizacion": db.query(
+            ItemSolicitudImpresionInventario
+        ).filter(
+            ItemSolicitudImpresionInventario.estado == ESTADO_SINCRONIZACION
+        ).count(),
         "resumen_establecimientos": _resumen_establecimientos(base),
         "lotes": (
             db.query(LoteImpresionInventario)
             .filter(LoteImpresionInventario.inventario_id == inventario.id)
             .order_by(LoteImpresionInventario.id.desc())
             .limit(20)
+            .all()
+        ),
+        "cargas_reportes": (
+            db.query(CargaInventarioImpresion)
+            .filter(CargaInventarioImpresion.inventario_id == inventario.id)
+            .order_by(
+                CargaInventarioImpresion.creado_en.desc(),
+                CargaInventarioImpresion.id.desc(),
+            )
+            .limit(50)
             .all()
         ),
         "pagina": pagina,
@@ -378,7 +442,7 @@ def importar_inventario(
     archivo: UploadFile = File(...),
     anio: str = Form(ANIO_INVENTARIO),
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     ruta_temporal = None
     try:
@@ -393,14 +457,36 @@ def importar_inventario(
         return RedirectResponse(
             url=f"/control-impresion?error={quote_plus(str(exc))}", status_code=303
         )
+    except SQLAlchemyError:
+        db.rollback()
+        return RedirectResponse(
+            url=(
+                "/control-impresion?error="
+                + quote_plus(
+                    "No se pudo completar la carga por un conflicto entre "
+                    "identificadores. Revisa los códigos QR del archivo."
+                )
+            ),
+            status_code=303,
+        )
     finally:
         if ruta_temporal and os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
 
     mensaje = (
-        f"Importación completada: {resultado['total']} bienes, "
-        f"{resultado['nuevos']} nuevos y {resultado['actualizados']} actualizados."
+        f"Importación acumulativa completada: {resultado['total']} filas "
+        f"procesadas, {resultado['nuevos']} nuevas, "
+        f"{resultado['actualizados']} actualizadas y "
+        f"{resultado['sin_cambios']} sin cambios. Universo actual: "
+        f"{resultado['total_universo']} bienes, "
+        f"{resultado['activos_fijos_universo']} activos fijos y "
+        f"{resultado['sobrantes_universo']} sobrantes."
     )
+    if resultado["solicitudes_vinculadas"]:
+        mensaje += (
+            f" {resultado['solicitudes_vinculadas']} QR solicitado(s) quedaron "
+            "listos para preparar su impresión."
+        )
     return RedirectResponse(
         url=(
             f"/control-impresion?inventario_id={resultado['inventario_id']}"
@@ -419,16 +505,18 @@ def crear_lote_impresion(
     establecimiento: str = Form(""),
     area: str = Form(""),
     estado: str = Form(""),
+    tipo_bien: str = Form(""),
     q: str = Form(""),
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     inventario = db.get(InventarioImpresion, inventario_id)
     if inventario is None:
         raise HTTPException(status_code=404, detail="Inventario no encontrado.")
     consulta = _aplicar_filtros(
         db.query(BienInventarioImpresion), inventario_id,
-        red=red, establecimiento=establecimiento, area=area, estado=estado, q=q,
+        red=red, establecimiento=establecimiento, area=area, estado=estado,
+        tipo_bien=tipo_bien, q=q,
     )
     if alcance == "seleccionados":
         if not bien_ids:
@@ -469,6 +557,7 @@ def crear_lote_impresion(
         "establecimiento": establecimiento or None,
         "area": area or None,
         "estado": estado or None,
+        "tipo_bien": tipo_bien or None,
         "busqueda": q or None,
         "excluidos": len(excluidos),
     }
@@ -493,12 +582,152 @@ def crear_lote_impresion(
     )
 
 
+@router.get("/control-impresion/solicitudes", response_class=HTMLResponse)
+def solicitudes_inventariadores(
+    request: Request,
+    db: Session = Depends(get_db),
+    _=Depends(requiere_administrador),
+):
+    solicitudes = (
+        db.query(SolicitudImpresionInventario)
+        .options(
+            joinedload(SolicitudImpresionInventario.usuario),
+            selectinload(SolicitudImpresionInventario.items)
+            .joinedload(ItemSolicitudImpresionInventario.bien),
+        )
+        .order_by(SolicitudImpresionInventario.id.desc())
+        .limit(200)
+        .all()
+    )
+    pendientes = [
+        item for solicitud in solicitudes for item in solicitud.items
+        if item.estado == "Pendiente"
+    ]
+    esperando = [
+        item for solicitud in solicitudes for item in solicitud.items
+        if item.estado == ESTADO_SINCRONIZACION
+    ]
+    return templates.TemplateResponse(
+        "control_impresion_solicitudes.html",
+        {
+            "request": request,
+            "solicitudes": solicitudes,
+            "pendientes": pendientes,
+            "esperando": esperando,
+            "max_bienes_lote": MAX_BIENES_POR_LOTE,
+        },
+    )
+
+
+@router.post("/control-impresion/solicitudes/lote")
+def crear_lote_desde_solicitudes(
+    item_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+    _=Depends(requiere_administrador),
+):
+    if not item_ids:
+        return RedirectResponse(
+            "/control-impresion/solicitudes?error="
+            + quote_plus("Selecciona al menos un QR pendiente."),
+            status_code=303,
+        )
+    items = (
+        db.query(ItemSolicitudImpresionInventario)
+        .options(
+            joinedload(ItemSolicitudImpresionInventario.bien),
+            joinedload(ItemSolicitudImpresionInventario.solicitud),
+        )
+        .filter(
+            ItemSolicitudImpresionInventario.id.in_(set(item_ids)),
+            ItemSolicitudImpresionInventario.estado == "Pendiente",
+        )
+        .order_by(ItemSolicitudImpresionInventario.id)
+        .all()
+    )
+    if not items:
+        return RedirectResponse(
+            "/control-impresion/solicitudes?error="
+            + quote_plus("Los QR seleccionados ya no están pendientes."),
+            status_code=303,
+        )
+    inventarios = {item.solicitud.inventario_id for item in items}
+    if len(inventarios) != 1:
+        return RedirectResponse(
+            "/control-impresion/solicitudes?error="
+            + quote_plus("Selecciona solicitudes de un solo inventario."),
+            status_code=303,
+        )
+    if len(items) > MAX_BIENES_POR_LOTE:
+        return RedirectResponse(
+            "/control-impresion/solicitudes?error=" + quote_plus(
+                f"El máximo por lote es {MAX_BIENES_POR_LOTE} QR."
+            ), status_code=303,
+        )
+
+    seleccionados = []
+    bienes_vistos = set()
+    solicitudes_afectadas = set()
+    for item in items:
+        solicitudes_afectadas.add(item.solicitud_id)
+        if item.bien is None:
+            item.estado = "Observado"
+            item.motivo_observacion = "El QR ya no tiene un bien relacionado."
+            continue
+        if item.bien_id in bienes_vistos:
+            item.estado = "Observado"
+            item.motivo_observacion = "El mismo bien fue incluido más de una vez."
+            continue
+        razon = clasificar_bienes_impresion([_adaptar_bien_pdf(item.bien)])[1]
+        if razon:
+            item.estado = "Observado"
+            item.motivo_observacion = razon[0]["razon"]
+            continue
+        bienes_vistos.add(item.bien_id)
+        seleccionados.append(item)
+
+    if not seleccionados:
+        for solicitud_id in solicitudes_afectadas:
+            actualizar_estado_solicitud(db.get(SolicitudImpresionInventario, solicitud_id))
+        db.commit()
+        return RedirectResponse(
+            "/control-impresion/solicitudes?error="
+            + quote_plus("Ninguno de los QR seleccionados puede imprimirse."),
+            status_code=303,
+        )
+
+    inventario_id = seleccionados[0].solicitud.inventario_id
+    lote = LoteImpresionInventario(
+        inventario_id=inventario_id,
+        estado="Preparado",
+        filtros=json.dumps({"origen": "Solicitudes de inventariadores"}),
+        total_bienes=len(seleccionados),
+    )
+    db.add(lote)
+    db.flush()
+    for item in seleccionados:
+        db.add(ItemLoteImpresionInventario(
+            lote_id=lote.id,
+            bien_id=item.bien_id,
+            solicitud_item_id=item.id,
+        ))
+        item.estado = "En lote"
+    db.flush()
+    for solicitud_id in solicitudes_afectadas:
+        actualizar_estado_solicitud(db.get(SolicitudImpresionInventario, solicitud_id))
+    db.commit()
+    return RedirectResponse(
+        f"/control-impresion/lotes/{lote.id}?info=" + quote_plus(
+            f"Lote preparado con {len(seleccionados)} QR solicitados."
+        ), status_code=303,
+    )
+
+
 @router.get("/control-impresion/lotes/{lote_id}", response_class=HTMLResponse)
 def detalle_lote_impresion(
     lote_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     lote = (
         db.query(LoteImpresionInventario)
@@ -529,7 +758,7 @@ def detalle_lote_impresion(
 def pdf_lote_impresion(
     lote_id: int,
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     lote = (
         db.query(LoteImpresionInventario)
@@ -610,7 +839,7 @@ def _crear_excel_lote(lote) -> bytes:
 def excel_lote_impresion(
     lote_id: int,
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     lote = (
         db.query(LoteImpresionInventario)
@@ -643,7 +872,7 @@ def confirmar_impresion_lote(
     alcance: str = Form(...),
     item_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
-    _=Depends(requiere_login),
+    _=Depends(requiere_administrador),
 ):
     lote = db.get(LoteImpresionInventario, lote_id)
     if lote is None:

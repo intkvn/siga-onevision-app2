@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block titulo %}Usuarios{% endblock %}
+{% block contenido %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-1">Usuarios</h2>
+        <p class="text-muted mb-0">El administrador crea y entrega las cuentas a los inventariadores.</p>
+    </div>
+</div>
+
+{% if request.query_params.get("error") %}<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>{% endif %}
+{% if request.query_params.get("info") %}<div class="alert alert-success">{{ request.query_params.get("info") }}</div>{% endif %}
+
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Crear usuario</h5>
+        <form method="post" action="/usuarios" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label">Nombre completo</label>
+                <input class="form-control" name="nombre_completo" required maxlength="200">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Usuario</label>
+                <input class="form-control" name="username" required maxlength="80" autocomplete="off">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Contraseña inicial</label>
+                <input class="form-control" type="password" name="password" required minlength="8" autocomplete="new-password">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Rol</label>
+                <select class="form-select" name="rol">
+                    {% for rol in roles %}<option value="{{ rol }}">{{ rol }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2"><button class="btn btn-primary w-100" type="submit">Crear</button></div>
+        </form>
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-body">
+        <h5 class="card-title">Cuentas registradas</h5>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Actualizar</th><th>Contraseña</th><th></th></tr></thead>
+                <tbody>
+                {% for usuario in usuarios %}
+                    <tr>
+                        <td><strong>{{ usuario.username }}</strong></td>
+                        <td colspan="3">
+                            <form method="post" action="/usuarios/{{ usuario.id }}/editar" class="row g-2 align-items-center">
+                                <div class="col-lg-5"><input class="form-control form-control-sm" name="nombre_completo" value="{{ usuario.nombre_completo }}" required></div>
+                                <div class="col-lg-3"><select class="form-select form-select-sm" name="rol">{% for rol in roles %}<option value="{{ rol }}" {{ "selected" if usuario.rol == rol else "" }}>{{ rol }}</option>{% endfor %}</select></div>
+                                <div class="col-lg-2"><span class="badge text-bg-{{ 'success' if usuario.activo else 'secondary' }}">{{ 'Activo' if usuario.activo else 'Inactivo' }}</span></div>
+                                <div class="col-lg-2"><button class="btn btn-sm btn-outline-primary" type="submit">Guardar</button></div>
+                            </form>
+                        </td>
+                        <td>
+                            <form method="post" action="/usuarios/{{ usuario.id }}/password" class="d-flex gap-1">
+                                <input class="form-control form-control-sm" type="password" name="password" minlength="8" placeholder="Nueva contraseña" required>
+                                <button class="btn btn-sm btn-outline-secondary" type="submit">Cambiar</button>
+                            </form>
+                        </td>
+                        <td>
+                            <form method="post" action="/usuarios/{{ usuario.id }}/estado">
+                                <button class="btn btn-sm btn-outline-{{ 'danger' if usuario.activo else 'success' }}" type="submit">{{ 'Desactivar' if usuario.activo else 'Activar' }}</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% else %}<tr><td colspan="7" class="text-center text-muted">No hay usuarios.</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block titulo %}Solicitudes de impresión{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">Solicitudes de inventariadores</h2>
+        <p class="text-muted mb-0">Agrupa los QR pendientes, genera su lote y confirma la impresión.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/control-impresion">Volver al control</a>
+</div>
+{% if request.query_params.get("error") %}<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>{% endif %}
+{% if request.query_params.get("info") %}<div class="alert alert-success">{{ request.query_params.get("info") }}</div>{% endif %}
+
+{% if esperando %}
+<section class="card mb-4 border-warning">
+    <div class="card-body">
+        <h5 class="card-title">Esperando actualización de One Vision</h5>
+        <p class="text-muted small">Estos QR fueron enviados después del último reporte. Al cargar el reporte actualizado se vincularán automáticamente y pasarán a pendientes de impresión.</p>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Solicitud</th><th>Inventariador</th><th>Fecha</th><th>QR</th></tr></thead>
+                <tbody>
+                {% for item in esperando %}
+                    <tr><td>#{{ item.solicitud_id }}</td><td>{{ item.solicitud.usuario.nombre_completo }}</td><td>{{ item.solicitud.creado_en.strftime("%d/%m/%Y %H:%M") }}</td><td><strong>{{ item.codigo_qr }}</strong></td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<section class="card mb-4 border-primary">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div><h5 class="card-title mb-1">Pendientes de impresión</h5><div class="text-muted small">{{ pendientes|length }} QR pendientes. Máximo {{ max_bienes_lote }} por lote.</div></div>
+        </div>
+        <form method="post" action="/control-impresion/solicitudes/lote">
+            <div class="table-responsive" style="max-height: 550px">
+                <table class="table table-sm table-hover align-middle">
+                    <thead class="sticky-top bg-white"><tr><th><input class="form-check-input" type="checkbox" id="marcar-todos"></th><th>Solicitud</th><th>Inventariador</th><th>QR</th><th>Tipo</th><th>Bien</th><th>Establecimiento</th><th>Reimpresión</th></tr></thead>
+                    <tbody>
+                    {% for item in pendientes %}
+                        <tr>
+                            <td><input class="form-check-input item-pendiente" type="checkbox" name="item_ids" value="{{ item.id }}"></td>
+                            <td>#{{ item.solicitud_id }}</td>
+                            <td>{{ item.solicitud.usuario.nombre_completo }}</td>
+                            <td><strong>{{ item.codigo_qr }}</strong></td>
+                            <td>{{ item.bien.tipo_bien if item.bien else "-" }}</td>
+                            <td>{{ item.bien.descripcion if item.bien else "-" }}</td>
+                            <td>{{ item.bien.establecimiento if item.bien and item.bien.establecimiento else "-" }}</td>
+                            <td>{{ "Sí" if item.es_reimpresion else "No" }}</td>
+                        </tr>
+                    {% else %}<tr><td colspan="8" class="text-center text-muted py-4">No hay QR pendientes.</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if pendientes %}<button class="btn btn-primary" type="submit">Preparar lote con seleccionados</button>{% endif %}
+        </form>
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-body">
+        <h5 class="card-title">Historial de solicitudes</h5>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead><tr><th>Solicitud</th><th>Inventariador</th><th>Fecha</th><th>Total</th><th>Observados</th><th>Por sincronizar</th><th>Estado</th><th>Detalle</th></tr></thead>
+                <tbody>
+                {% for solicitud in solicitudes %}
+                    {% set observados = solicitud.items | selectattr('estado', 'equalto', 'Observado') | list %}
+                    {% set sincronizando = solicitud.items | selectattr('estado', 'equalto', 'Pendiente de sincronización') | list %}
+                    <tr>
+                        <td>#{{ solicitud.id }}</td><td>{{ solicitud.usuario.nombre_completo }}</td><td>{{ solicitud.creado_en.strftime("%d/%m/%Y %H:%M") }}</td><td>{{ solicitud.items|length }}</td><td>{{ observados|length }}</td><td>{{ sincronizando|length }}</td><td>{{ solicitud.estado }}</td>
+                        <td><details><summary>Ver QR</summary>{% for item in solicitud.items %}<div class="small border-bottom py-1"><strong>{{ item.codigo_qr }}</strong> · {{ item.estado }}{% if item.motivo_observacion %}<div class="{{ 'text-danger' if item.estado == 'Observado' else 'text-muted' }}">{{ item.motivo_observacion }}</div>{% endif %}</div>{% endfor %}</details></td>
+                    </tr>
+                {% else %}<tr><td colspan="8" class="text-center text-muted">No hay solicitudes.</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+<script>
+const marcarTodos = document.getElementById("marcar-todos");
+if (marcarTodos) marcarTodos.addEventListener("change", () => document.querySelectorAll(".item-pendiente").forEach(item => item.checked = marcarTodos.checked));
+</script>
+{% endblock %}

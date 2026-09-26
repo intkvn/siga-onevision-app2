@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block titulo %}Solicitar stickers{% endblock %}
+{% block contenido %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+        <h2 class="mb-1">Solicitud de stickers</h2>
+        <p class="text-muted mb-0">Ingresa uno o varios códigos QR y revisa el estado de tus envíos.</p>
+    </div>
+    <div class="d-flex gap-2">
+        {% if esperando %}<span class="badge text-bg-warning fs-6">{{ esperando }} QR esperando actualización</span>{% endif %}
+        {% if listos %}<span class="badge text-bg-success fs-6">{{ listos }} solicitud(es) lista(s) para recojo</span>{% endif %}
+    </div>
+</div>
+
+{% if request.query_params.get("error") %}<div class="alert alert-danger">{{ request.query_params.get("error") }}</div>{% endif %}
+{% if request.query_params.get("info") %}<div class="alert alert-success">{{ request.query_params.get("info") }}</div>{% endif %}
+
+{% if not inventario %}
+<div class="alert alert-warning">Aún no existe un inventario cargado.</div>
+{% else %}
+<section class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Enviar códigos QR</h5>
+        <p class="small text-muted">Puedes ingresar un QR o pegar una lista separada por saltos de línea, espacios o comas. Máximo {{ max_qr }} por solicitud.</p>
+        <form method="post" action="/inventariador/validar">
+            <textarea class="form-control font-monospace" name="codigos_qr" rows="6" required placeholder="Ejemplo:&#10;696721&#10;696723">{{ texto_qr }}</textarea>
+            <button class="btn btn-primary mt-3" type="submit">Validar antes de enviar</button>
+        </form>
+    </div>
+</section>
+
+{% if resultados is not none %}
+<section class="card mb-4 border-primary">
+    <div class="card-body">
+        <h5 class="card-title">Resultado de la validación</h5>
+        <form method="post" action="/inventariador/solicitudes">
+            <input type="hidden" name="inventario_id" value="{{ inventario.id }}">
+            <textarea class="d-none" name="codigos_qr">{{ texto_qr }}</textarea>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>QR</th><th>Bien</th><th>Estado</th><th>Detalle</th><th>Confirmación</th></tr></thead>
+                    <tbody>
+                    {% for fila in resultados %}
+                        <tr>
+                            <td><strong>{{ fila.codigo_qr }}</strong></td>
+                            <td>{{ fila.bien.descripcion if fila.bien else "-" }}</td>
+                            {% set clase_validacion = 'success' if fila.estado == 'Disponible' else ('warning' if fila.estado in ['Reimpresión', 'Esperando actualización'] else 'danger') %}
+                            <td><span class="badge text-bg-{{ clase_validacion }}">{{ fila.estado }}</span></td>
+                            <td>{{ fila.motivo or "Listo para solicitar." }}</td>
+                            <td>
+                                {% if fila.requiere_reimpresion %}
+                                <label class="form-check-label"><input class="form-check-input" type="checkbox" name="reimpresiones" value="{{ fila.codigo_qr }}" required> Confirmar reimpresión</label>
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <button class="btn btn-success" type="submit">Enviar solicitud</button>
+            <a class="btn btn-outline-secondary" href="/inventariador">Cancelar</a>
+        </form>
+    </div>
+</section>
+{% endif %}
+
+<section class="card">
+    <div class="card-body">
+        <h5 class="card-title">Historial de envíos</h5>
+        <div class="table-responsive">
+            <table class="table align-middle">
+                <thead><tr><th>Solicitud</th><th>Fecha</th><th>QR</th><th>Observados</th><th>Por sincronizar</th><th>Estado</th><th>Detalle</th><th></th></tr></thead>
+                <tbody>
+                {% for solicitud in solicitudes %}
+                    {% set observados = solicitud.items | selectattr('estado', 'equalto', 'Observado') | list %}
+                    {% set sincronizando = solicitud.items | selectattr('estado', 'equalto', 'Pendiente de sincronización') | list %}
+                    <tr>
+                        <td>#{{ solicitud.id }}</td>
+                        <td>{{ solicitud.creado_en.strftime("%d/%m/%Y %H:%M") }}</td>
+                        <td>{{ solicitud.items|length }}</td>
+                        <td><span class="badge text-bg-{{ 'danger' if observados else 'secondary' }}">{{ observados|length }}</span></td>
+                        <td><span class="badge text-bg-{{ 'warning' if sincronizando else 'secondary' }}">{{ sincronizando|length }}</span></td>
+                        {% set clase_solicitud = 'success' if solicitud.estado.startswith('Listo') or solicitud.estado.startswith('Recogido') else ('danger' if solicitud.estado == 'Observado' else ('warning' if 'actualización' in solicitud.estado or 'sincronización' in solicitud.estado else 'primary')) %}
+                        <td><span class="badge text-bg-{{ clase_solicitud }}">{{ solicitud.estado }}</span></td>
+                        <td>
+                            <details>
+                                <summary>Ver QR</summary>
+                                <div class="mt-2">
+                                {% for item in solicitud.items %}
+                                    <div class="border-bottom py-1"><strong>{{ item.codigo_qr }}</strong> · {{ item.estado }}{% if item.es_reimpresion %} · Reimpresión{% endif %}{% if item.motivo_observacion %}<div class="{{ 'text-danger' if item.estado == 'Observado' else 'text-muted' }} small">{{ item.motivo_observacion }}</div>{% endif %}</div>
+                                {% endfor %}
+                                </div>
+                            </details>
+                        </td>
+                        <td>
+                            {% if solicitud.estado.startswith("Listo para recojo") or solicitud.estado == "Atención parcial" %}
+                            <form id="form-recoger-{{ solicitud.id }}" method="post" action="/inventariador/solicitudes/{{ solicitud.id }}/recoger">
+                                <button class="btn btn-sm btn-success js-confirmar-recojo" type="button" data-form-id="form-recoger-{{ solicitud.id }}">Marcar recogido</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% else %}<tr><td colspan="8" class="text-center text-muted">Todavía no realizaste solicitudes.</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<dialog id="modal-confirmar-recojo" class="confirmacion-modal" aria-labelledby="titulo-confirmar-recojo">
+    <div class="p-4">
+        <h5 id="titulo-confirmar-recojo" class="mb-2">Confirmar recojo</h5>
+        <p class="text-muted mb-4">¿Confirmas que recogiste los stickers listos?</p>
+        <div class="d-flex justify-content-end gap-2">
+            <button class="btn btn-outline-secondary" type="button" id="cancelar-recojo">Cancelar</button>
+            <button class="btn btn-success" type="button" id="confirmar-recojo">Sí, marcar recogido</button>
+        </div>
+    </div>
+</dialog>
+
+<style>
+    .confirmacion-modal {
+        width: min(92vw, 380px);
+        max-width: 380px;
+        padding: 0;
+        border: 0;
+        border-radius: 1rem;
+        box-shadow: 0 1rem 3rem rgba(0, 0, 0, .28);
+    }
+    .confirmacion-modal::backdrop {
+        background: rgba(0, 0, 0, .55);
+    }
+    @media (max-width: 420px) {
+        .confirmacion-modal .d-flex {
+            flex-direction: column-reverse;
+        }
+        .confirmacion-modal .btn {
+            width: 100%;
+        }
+    }
+</style>
+
+<script>
+    (() => {
+        const modal = document.getElementById("modal-confirmar-recojo");
+        const cancelar = document.getElementById("cancelar-recojo");
+        const confirmar = document.getElementById("confirmar-recojo");
+        let formularioPendiente = null;
+
+        document.querySelectorAll(".js-confirmar-recojo").forEach((boton) => {
+            boton.addEventListener("click", () => {
+                formularioPendiente = document.getElementById(boton.dataset.formId);
+                modal.showModal();
+            });
+        });
+
+        cancelar.addEventListener("click", () => {
+            formularioPendiente = null;
+            modal.close();
+        });
+
+        confirmar.addEventListener("click", () => {
+            if (!formularioPendiente) return;
+            const formulario = formularioPendiente;
+            formularioPendiente = null;
+            modal.close();
+            formulario.requestSubmit();
+        });
+
+        modal.addEventListener("click", (evento) => {
+            if (evento.target === modal) {
+                formularioPendiente = null;
+                modal.close();
+            }
+        });
+    })();
+</script>
+{% endif %}
+{% endblock %}

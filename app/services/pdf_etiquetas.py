@@ -55,16 +55,15 @@ def razon_exclusion_bien(bien) -> str | None:
         return "Ruta QR no válida (se requiere http o https)"
     if not texto_identificador(bien.codigo_qr):
         return "Sin código QR"
-    if not texto_identificador(bien.codigo_patrimonial):
-        return "Sin código patrimonial"
 
     configuracion_qr = _configuracion_qr(ruta)
     if configuracion_qr is None:
         return "Ruta QR demasiado extensa para imprimirse con legibilidad"
 
+    patrimonio = texto_identificador(bien.codigo_patrimonial)
     codigo_visible = (
-        f"{texto_identificador(bien.codigo_qr)}-"
-        f"{texto_identificador(bien.codigo_patrimonial)}"
+        f"{texto_identificador(bien.codigo_qr)}-{patrimonio}"
+        if patrimonio else texto_identificador(bien.codigo_qr)
     )
     ancho_codigo = stringWidth(codigo_visible, "Helvetica-Bold", 7.0)
     ancho_disponible = 35.1 * mm
@@ -111,7 +110,7 @@ def generar_pdf_etiquetas(bienes, perfil, destino=None):
         razon = razon_exclusion_bien(bien)
         if razon:
             raise ValueError(
-                f"El bien {texto_identificador(bien.codigo_patrimonial)} "
+                f"El bien {texto_identificador(bien.codigo_patrimonial) or texto_identificador(bien.codigo_qr)} "
                 f"no se puede imprimir: {razon}."
             )
 
@@ -231,9 +230,10 @@ def _dibujar_contenido_vertical(pdf, bien, ancho, alto, perfil):
     qr_y = qr_superior - tamano_qr
     _dibujar_qr(pdf, ruta, qr_x, qr_y, tamano_qr)
 
+    patrimonio = texto_identificador(bien.codigo_patrimonial)
     codigo_visible = (
-        f"{texto_identificador(bien.codigo_qr)}-"
-        f"{texto_identificador(bien.codigo_patrimonial)}"
+        f"{texto_identificador(bien.codigo_qr)}-{patrimonio}"
+        if patrimonio else texto_identificador(bien.codigo_qr)
     )
     _dibujar_centrado_escalado(
         pdf,

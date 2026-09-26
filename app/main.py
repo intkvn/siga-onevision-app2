@@ -7,11 +7,16 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import SECRET_KEY
-from app.database import Base, engine, get_db
-from app.auth import requiere_login
+from app.database import Base, SessionLocal, engine, get_db
+from app.auth import (
+    ROL_INVENTARIADOR,
+    asegurar_usuario_administrador,
+    requiere_login,
+)
 from app.routers import (
     auth_routes, pecosas, maestros, normalizacion, impresion, control,
     carga_inicial, verificacion, control_impresion, maestro_patrimonial,
+    inventariador, usuarios,
 )
 from app.models import (  # noqa: F401  (necesario para que create_all las vea)
     Pecosa, PerfilImpresionEtiqueta, InventarioImpresion,
@@ -20,12 +25,146 @@ from app.models import (  # noqa: F401  (necesario para que create_all las vea)
     ObservacionControlPecosa, CargaPatrimonial, BienPatrimonial,
     BienCargaPatrimonial, VersionBienPatrimonial, CambioBienPatrimonial,
     CorreccionBienPatrimonial, ConflictoBienPatrimonial,
-    ExportacionPatrimonial,
+    ExportacionPatrimonial, UsuarioAplicacion, SolicitudImpresionInventario,
+    ItemSolicitudImpresionInventario,
+    CargaInventarioImpresion,
 )
+from app.services.solicitudes_impresion import reconciliar_solicitudes_pendientes
+from app.services.excel_inventario_impresion import reparar_universos_acumulativos
 
 # Crea las tablas si no existen todavía (para un proyecto de un solo usuario,
 # esto es más simple que manejar migraciones)
 Base.metadata.create_all(bind=engine)
+
+
+def _migrar_bienes_impresion_sqlite():
+    """Permite sobrantes sin código patrimonial en bases locales existentes."""
+    if engine.dialect.name != "sqlite":
+        return
+    columnas = inspect(engine).get_columns("bienes_inventario_impresion")
+    codigo = next(
+        (columna for columna in columnas if columna["name"] == "codigo_patrimonial"),
+        None,
+    )
+    if codigo is None or codigo.get("nullable", True):
+        return
+    nombres = {columna["name"] for columna in columnas}
+    conexion = engine.raw_connection()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=OFF")
+        cursor.execute("BEGIN")
+        cursor.execute("""
+            CREATE TABLE bienes_inventario_impresion_nueva (
+                id INTEGER NOT NULL PRIMARY KEY,
+                inventario_id INTEGER NOT NULL,
+                bien_alta_id INTEGER,
+                codigo_patrimonial VARCHAR(30),
+                codigo_qr VARCHAR(50),
+                tipo_bien VARCHAR(30) NOT NULL DEFAULT 'Activo fijo',
+                ruta_qr VARCHAR(500),
+                descripcion VARCHAR(500) NOT NULL,
+                establecimiento VARCHAR(300), red VARCHAR(250), area VARCHAR(300),
+                marca VARCHAR(150), modelo VARCHAR(200), color VARCHAR(100),
+                nro_serie VARCHAR(150), activo INTEGER NOT NULL,
+                imprimible INTEGER NOT NULL, motivo_bloqueo VARCHAR(300),
+                estado_impresion VARCHAR(30) NOT NULL DEFAULT 'Pendiente',
+                sticker_generado_en TIMESTAMP, impreso_en TIMESTAMP,
+                relacion_alta VARCHAR(30) NOT NULL,
+                importado_en DATETIME NOT NULL, actualizado_en DATETIME NOT NULL,
+                CONSTRAINT uq_bien_inventario_codigo
+                    UNIQUE (inventario_id, codigo_patrimonial),
+                FOREIGN KEY(inventario_id) REFERENCES inventarios_impresion (id),
+                FOREIGN KEY(bien_alta_id) REFERENCES bienes_alta (id)
+            )
+        """)
+        tipo_origen = (
+            "tipo_bien" if "tipo_bien" in nombres
+            else "CASE WHEN codigo_patrimonial IS NULL OR codigo_patrimonial = '' "
+                 "THEN 'Sobrante' ELSE 'Activo fijo' END"
+        )
+        columnas_copia = (
+            "id, inventario_id, bien_alta_id, codigo_patrimonial, codigo_qr, "
+            "ruta_qr, descripcion, establecimiento, red, area, marca, modelo, "
+            "color, nro_serie, activo, imprimible, motivo_bloqueo, "
+            "estado_impresion, sticker_generado_en, impreso_en, relacion_alta, "
+            "importado_en, actualizado_en"
+        )
+        cursor.execute(f"""
+            INSERT INTO bienes_inventario_impresion_nueva (
+                id, inventario_id, bien_alta_id, codigo_patrimonial, codigo_qr,
+                ruta_qr, descripcion, establecimiento, red, area, marca, modelo,
+                color, nro_serie, activo, imprimible, motivo_bloqueo,
+                estado_impresion, sticker_generado_en, impreso_en, relacion_alta,
+                importado_en, actualizado_en, tipo_bien
+            ) SELECT {columnas_copia}, {tipo_origen}
+              FROM bienes_inventario_impresion
+        """)
+        cursor.execute("DROP TABLE bienes_inventario_impresion")
+        cursor.execute(
+            "ALTER TABLE bienes_inventario_impresion_nueva "
+            "RENAME TO bienes_inventario_impresion"
+        )
+        conexion.commit()
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+        conexion.close()
+
+
+_migrar_bienes_impresion_sqlite()
+
+with engine.begin() as conn:
+    columnas_bienes_impresion = {
+        columna["name"]
+        for columna in inspect(conn).get_columns("bienes_inventario_impresion")
+    }
+    if "tipo_bien" not in columnas_bienes_impresion:
+        conn.execute(text(
+            "ALTER TABLE bienes_inventario_impresion ADD COLUMN "
+            "tipo_bien VARCHAR(30) NOT NULL DEFAULT 'Activo fijo'"
+        ))
+    if engine.dialect.name == "postgresql":
+        conn.execute(text(
+            "ALTER TABLE bienes_inventario_impresion "
+            "ALTER COLUMN codigo_patrimonial DROP NOT NULL"
+        ))
+    columnas_items_lote = {
+        columna["name"]
+        for columna in inspect(conn).get_columns("items_lote_impresion_inventario")
+    }
+    if "solicitud_item_id" not in columnas_items_lote:
+        conn.execute(text(
+            "ALTER TABLE items_lote_impresion_inventario ADD COLUMN "
+            "solicitud_item_id INTEGER REFERENCES "
+            "items_solicitud_impresion_inventario(id)"
+        ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_item_lote_solicitud_item "
+        "ON items_lote_impresion_inventario (solicitud_item_id)"
+    ))
+    for nombre, columna in (
+        ("inventario_id", "inventario_id"),
+        ("codigo_patrimonial", "codigo_patrimonial"),
+        ("codigo_qr", "codigo_qr"),
+        ("tipo_bien", "tipo_bien"),
+        ("activo", "activo"),
+    ):
+        conn.execute(text(
+            f"CREATE INDEX IF NOT EXISTS ix_bienes_inventario_impresion_{nombre} "
+            f"ON bienes_inventario_impresion ({columna})"
+        ))
+
+with SessionLocal() as db:
+    asegurar_usuario_administrador(db)
+    reparar_universos_acumulativos(db)
+    inventarios_solicitudes = db.query(InventarioImpresion.id).all()
+    for (inventario_id,) in inventarios_solicitudes:
+        reconciliar_solicitudes_pendientes(db, inventario_id)
+    db.commit()
 
 with engine.begin() as conn:
     columnas_carga_mp = {
@@ -239,6 +378,8 @@ app.include_router(verificacion.router)
 app.include_router(carga_inicial.router)
 app.include_router(control_impresion.router)
 app.include_router(maestro_patrimonial.router)
+app.include_router(inventariador.router)
+app.include_router(usuarios.router)
 
 
 @app.on_event("startup")
@@ -255,4 +396,6 @@ def health_check():
 
 @app.get("/", response_class=HTMLResponse)
 def inicio(request: Request, _=Depends(requiere_login)):
+    if request.session.get("rol") == ROL_INVENTARIADOR:
+        return RedirectResponse(url="/inventariador")
     return RedirectResponse(url="/pecosas")

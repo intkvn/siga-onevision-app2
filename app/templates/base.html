@@ -10,8 +10,11 @@
     {% if request.session.get("logueado") %}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
         <div class="container">
-            <a class="navbar-brand" href="/">SIGA → One Visión</a>
+            <a class="navbar-brand" href="{{ '/inventariador' if request.session.get('rol') == 'Inventariador' else '/' }}">SIGA → One Visión</a>
             <div class="navbar-nav">
+                {% if request.session.get("rol") == "Inventariador" %}
+                <a class="nav-link" href="/inventariador">Solicitar stickers</a>
+                {% else %}
                 <a class="nav-link" href="/pecosas">Pecosas</a>
                 <a class="nav-link" href="/normalizacion">Normalización</a>
                 <a class="nav-link" href="/maestros">Maestros</a>
@@ -21,6 +24,8 @@
                 <a class="nav-link" href="/control">Control General</a>
                 <a class="nav-link" href="/verificacion">Verificación</a>
                 <a class="nav-link" href="/carga-inicial">Carga Inicial</a>
+                <a class="nav-link" href="/usuarios">Usuarios</a>
+                {% endif %}
                 <a class="nav-link" href="/logout">Salir</a>
             </div>
         </div>

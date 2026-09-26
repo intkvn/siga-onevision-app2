@@ -26,7 +26,8 @@ from app.models import (
     ItemLoteImpresionInventario, CargaPatrimonial, BienPatrimonial,
     BienCargaPatrimonial, VersionBienPatrimonial, CambioBienPatrimonial,
     CorreccionBienPatrimonial, ConflictoBienPatrimonial,
-    ExportacionPatrimonial,
+    ExportacionPatrimonial, UsuarioAplicacion, SolicitudImpresionInventario,
+    ItemSolicitudImpresionInventario, CargaInventarioImpresion,
 )
 from app.routers.carga_inicial import _estado_maestros
 from app.routers.control import (
@@ -52,6 +53,10 @@ from app.services.pagination import paginas_visibles, rango_registros
 from app.services.pdf_etiquetas import (
     _ajustar_bloques_inferiores, clasificar_bienes_impresion, generar_pdf_etiquetas,
     numero_paginas_para_bienes,
+)
+from app.services.solicitudes_impresion import (
+    ESTADO_SINCRONIZACION, crear_solicitud, normalizar_lista_qr,
+    validar_qrs_solicitud,
 )
 from app.services.pdf_ficha_patrimonial import generar_ficha_activo_pdf
 from app.routers.verificacion import (
@@ -233,6 +238,17 @@ class PdfEtiquetasTest(unittest.TestCase):
 
         tamano_qr = dibujar_qr.call_args.args[4]
         self.assertAlmostEqual(tamano_qr / mm, 27.0, places=2)
+
+    def test_permite_etiqueta_de_sobrante_sin_codigo_patrimonial(self):
+        bien = self._bien(1)
+        bien.codigo_patrimonial = None
+
+        imprimibles, excluidos = clasificar_bienes_impresion([bien])
+        contenido = generar_pdf_etiquetas([bien], self.perfil)
+
+        self.assertEqual(imprimibles, [bien])
+        self.assertEqual(excluidos, [])
+        self.assertTrue(contenido.startswith(b"%PDF-"))
 
     def test_descripcion_y_establecimiento_comparten_espacio_sin_solaparse(self):
         alto_disponible = 29.0
@@ -983,7 +999,7 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         self.db.add(BienAlta(
             pecosa_id=pecosa.id,
             lote_id=lote.id,
-            codigo_patrimonial="0001",
+            codigo_patrimonial="000000000001",
             descripcion="BIEN CON ALTA",
         ))
         self.db.commit()
@@ -1010,15 +1026,15 @@ class ControlImpresionInventarioTest(unittest.TestCase):
     def test_importa_actualiza_y_conserva_sin_area(self):
         ruta = self._reporte([
             [
-                " 0001 ", 1, "https://sir.example/qr/equipo/1", "EQUIPO 1",
+                " 000000000001 ", 1, "https://sir.example/qr/equipo/1", "EQUIPO 1",
                 "ESTABLECIMIENTO A", None, None, "MARCA", "MODELO", "NEGRO", "S1",
             ],
             [
-                "0002", 2, None, "EQUIPO 2", "ESTABLECIMIENTO A",
+                "000000000002", 2, None, "EQUIPO 2", "ESTABLECIMIENTO A",
                 "RED A", "AREA A", None, None, None, None,
             ],
             [
-                "0001", 1, "https://sir.example/qr/equipo/1", "DUPLICADO",
+                "000000000001", 1, "https://sir.example/qr/equipo/1", "DUPLICADO",
                 "ESTABLECIMIENTO A", None, None, None, None, None, None,
             ],
         ])
@@ -1032,7 +1048,7 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         bienes = self.db.query(BienInventarioImpresion).order_by(
             BienInventarioImpresion.codigo_patrimonial
         ).all()
-        self.assertEqual(bienes[0].codigo_patrimonial, "0001")
+        self.assertEqual(bienes[0].codigo_patrimonial, "000000000001")
         self.assertEqual(bienes[0].codigo_qr, "1")
         self.assertIsNone(bienes[0].area)
         self.assertEqual(bienes[0].relacion_alta, "Vinculado")
@@ -1045,7 +1061,7 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         self.db.commit()
 
         ruta_actualizada = self._reporte([[
-            "0001", 1, "https://sir.example/qr/equipo/1", "EQUIPO ACTUALIZADO",
+            "000000000001", 1, "https://sir.example/qr/equipo/1", "EQUIPO ACTUALIZADO",
             "ESTABLECIMIENTO A", "RED A", "AREA COMPLETA", "MARCA", "MODELO",
             "NEGRO", "S1",
         ]])
@@ -1054,18 +1070,175 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         )
         self.assertEqual(segundo["nuevos"], 0)
         self.assertEqual(segundo["actualizados"], 1)
-        self.assertEqual(segundo["inactivos"], 1)
+        self.assertEqual(segundo["inactivos"], 0)
+        self.assertEqual(segundo["total_universo"], 2)
         self.db.expire_all()
         primero = self.db.query(BienInventarioImpresion).filter_by(
-            codigo_patrimonial="0001"
+            codigo_patrimonial="000000000001"
         ).one()
         segundo_bien = self.db.query(BienInventarioImpresion).filter_by(
-            codigo_patrimonial="0002"
+            codigo_patrimonial="000000000002"
         ).one()
         self.assertEqual(primero.area, "AREA COMPLETA")
         self.assertEqual(primero.activo, 1)
         self.assertEqual(primero.estado_impresion, "Impreso")
-        self.assertEqual(segundo_bien.activo, 0)
+        self.assertEqual(segundo_bien.activo, 1)
+
+        tercero = importar_reporte_inventario(
+            self.db, ruta_actualizada, "reporte_sin_cambios.xlsx", anio="2026"
+        )
+        self.assertEqual(tercero["nuevos"], 0)
+        self.assertEqual(tercero["actualizados"], 0)
+        self.assertEqual(tercero["sin_cambios"], 1)
+        self.assertEqual(tercero["total_universo"], 2)
+        cargas = self.db.query(CargaInventarioImpresion).order_by(
+            CargaInventarioImpresion.id
+        ).all()
+        self.assertEqual(len(cargas), 3)
+        self.assertEqual(cargas[-1].filas_procesadas, 1)
+        self.assertEqual(cargas[-1].sin_cambios, 1)
+        self.assertEqual(cargas[-1].total_universo, 2)
+
+    def test_importa_sobrante_sin_patrimonial_y_normaliza_qr(self):
+        ruta = self._reporte([[
+            None, "00000054", "https://sir.example/qr/equipo/54",
+            "SOBRANTE INVENTARIADO", "SEDE DIRESA", None, "PATRIMONIO",
+            None, None, None, None,
+        ]])
+
+        resultado = importar_reporte_inventario(
+            self.db, ruta, "sobrantes.xlsx", anio="2026"
+        )
+
+        bien = self.db.query(BienInventarioImpresion).one()
+        self.assertEqual(resultado["sobrantes"], 1)
+        self.assertEqual(resultado["activos_fijos"], 0)
+        self.assertIsNone(bien.codigo_patrimonial)
+        self.assertEqual(bien.codigo_qr, "54")
+        self.assertEqual(bien.tipo_bien, "Sobrante")
+        self.assertEqual(bien.estado_impresion, "Pendiente")
+
+    def test_normaliza_codigo_de_11_digitos_y_clasifica_codigo_corto(self):
+        ruta = self._reporte([
+            [
+                "42202400609", "3015", "https://sir.example/qr/equipo/3015",
+                "AGITADOR MAGNETICO", "SEDE DIRESA", None, "LABORATORIO",
+                None, None, None, None,
+            ],
+            [
+                "74648390", "69", "https://sir.example/qr/equipo/69",
+                "SILLA GIRATORIA", "SEDE DIRESA", None, "PATRIMONIO",
+                None, None, None, None,
+            ],
+            [
+                "74648390", "70", "https://sir.example/qr/equipo/70",
+                "SILLA GIRATORIA 2", "SEDE DIRESA", None, "PATRIMONIO",
+                None, None, None, None,
+            ],
+        ])
+
+        resultado = importar_reporte_inventario(
+            self.db, ruta, "clasificacion.xlsx", anio="2026"
+        )
+
+        bienes = self.db.query(BienInventarioImpresion).order_by(
+            BienInventarioImpresion.codigo_qr
+        ).all()
+        activo = next(bien for bien in bienes if bien.codigo_qr == "3015")
+        sobrante = next(bien for bien in bienes if bien.codigo_qr == "69")
+        self.assertEqual(activo.codigo_patrimonial, "042202400609")
+        self.assertEqual(activo.tipo_bien, "Activo fijo")
+        self.assertIsNone(sobrante.codigo_patrimonial)
+        self.assertEqual(sobrante.tipo_bien, "Sobrante")
+        self.assertEqual(resultado["activos_fijos"], 1)
+        self.assertEqual(resultado["sobrantes"], 2)
+        self.assertEqual(resultado["nuevos"], 3)
+
+    def test_qr_nuevo_espera_reporte_y_se_vincula_sin_observarse(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        usuario = UsuarioAplicacion(
+            username="inventariador2", nombre_completo="INVENTARIADOR DOS",
+            password_hash="hash", rol="Inventariador",
+        )
+        self.db.add_all([inventario, usuario])
+        self.db.commit()
+
+        validacion = validar_qrs_solicitud(self.db, inventario.id, ["69"])
+        self.assertEqual(validacion[0]["estado"], "Esperando actualización")
+        solicitud = crear_solicitud(
+            self.db, inventario.id, usuario.id, ["69"]
+        )
+        self.assertEqual(solicitud.estado, "Esperando actualización")
+        self.assertEqual(solicitud.items[0].estado, ESTADO_SINCRONIZACION)
+
+        ruta = self._reporte([[
+            None, "00000069", "https://sir.example/qr/equipo/69",
+            "SOBRANTE RECIENTE", "SEDE DIRESA", None, "PATRIMONIO",
+            None, None, None, None,
+        ]])
+        resultado = importar_reporte_inventario(
+            self.db, ruta, "reporte_actualizado.xlsx", anio="2026"
+        )
+        bien = self.db.query(BienInventarioImpresion).filter_by(
+            inventario_id=inventario.id, codigo_qr="69"
+        ).one()
+        self.db.refresh(solicitud)
+        self.db.refresh(solicitud.items[0])
+
+        self.assertEqual(resultado["solicitudes_vinculadas"], 1)
+        self.assertEqual(solicitud.items[0].bien_id, bien.id)
+        self.assertEqual(solicitud.items[0].estado, "Pendiente")
+        self.assertEqual(solicitud.estado, "Pendiente")
+
+    def test_solicitud_pasa_a_lista_y_luego_exige_confirmar_reimpresion(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        usuario = UsuarioAplicacion(
+            username="inventariador1", nombre_completo="INVENTARIADOR UNO",
+            password_hash="hash", rol="Inventariador",
+        )
+        bien = BienInventarioImpresion(
+            inventario=inventario, codigo_patrimonial=None, codigo_qr="54",
+            tipo_bien="Sobrante", ruta_qr="https://sir.example/qr/equipo/54",
+            descripcion="SOBRANTE", imprimible=1,
+        )
+        self.db.add_all([inventario, usuario, bien])
+        self.db.commit()
+
+        self.assertEqual(normalizar_lista_qr("000054, 000054\n55"), ["54", "55"])
+        solicitud = crear_solicitud(
+            self.db, inventario.id, usuario.id, ["54"]
+        )
+        item_solicitud = solicitud.items[0]
+        self.assertEqual(item_solicitud.estado, "Pendiente")
+
+        lote = LoteImpresionInventario(
+            inventario_id=inventario.id, estado="Preparado", total_bienes=1,
+        )
+        item_lote = ItemLoteImpresionInventario(
+            lote=lote, bien=bien, solicitud_item=item_solicitud,
+        )
+        self.db.add_all([lote, item_lote])
+        item_solicitud.estado = "En lote"
+        self.db.commit()
+        _marcar_pdf_generado(self.db, lote)
+        _confirmar_items_impresos(
+            self.db, lote,
+            self.db.query(ItemLoteImpresionInventario).filter_by(lote_id=lote.id),
+        )
+        self.db.refresh(item_solicitud)
+        self.db.refresh(solicitud)
+        self.assertEqual(item_solicitud.estado, "Listo para recojo")
+        self.assertEqual(solicitud.estado, "Listo para recojo")
+
+        item_solicitud.estado = "Recogido"
+        self.db.commit()
+        validacion = validar_qrs_solicitud(self.db, inventario.id, ["54"])
+        self.assertEqual(validacion[0]["estado"], "Reimpresión")
+        self.assertTrue(validacion[0]["requiere_reimpresion"])
 
     def test_estado_cambia_al_generar_y_confirmar_impresion(self):
         inventario = InventarioImpresion(

@@ -70,11 +70,11 @@ setTimeout(function consultar() {
                 barra.style.width = `${data.progreso || 0}%`;
                 barra.textContent = `${data.progreso || 0}%`;
                 if (data.mensaje) mensaje.textContent = data.mensaje;
-                setTimeout(consultar, 1500);
+                setTimeout(consultar, 4000);
             }
             else window.location.reload();
-        }).catch(() => setTimeout(consultar, 3000));
-}, 1200);
+        }).catch(() => setTimeout(consultar, 5000));
+}, 2000);
 </script>
 {% endif %}
 {% endblock %}

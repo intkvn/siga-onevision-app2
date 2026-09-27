@@ -1465,6 +1465,29 @@ class MaestroPatrimonialTest(unittest.TestCase):
         self.assertEqual(no_incluido.clasificacion, "No incluido")
         self.assertIsNotNone(no_incluido.bien_id)
 
+    def test_confirmacion_aplica_varios_bloques_sin_perder_trazabilidad(self):
+        cantidad = 775
+        carga = self._validar(self._reporte([
+            self._fila(f"{indice:012d}", f"QR-{indice}")
+            for indice in range(1, cantidad + 1)
+        ]))
+
+        with patch("app.services.maestro_patrimonial.SessionLocal", self.factory):
+            confirmar_carga_patrimonial(carga.id)
+
+        self.db.expire_all()
+        carga = self.db.get(CargaPatrimonial, carga.id)
+        self.assertEqual(carga.estado, "Completada")
+        self.assertEqual(carga.progreso, 100)
+        self.assertEqual(self.db.query(BienPatrimonial).count(), cantidad)
+        self.assertEqual(self.db.query(VersionBienPatrimonial).count(), cantidad)
+        self.assertEqual(
+            self.db.query(BienCargaPatrimonial).filter(
+                BienCargaPatrimonial.bien_id.is_(None)
+            ).count(),
+            0,
+        )
+
     def test_carga_parcial_no_clasifica_ausentes_como_no_incluidos(self):
         primera = self._validar(self._reporte([
             self._fila("0001", "QR-001"),

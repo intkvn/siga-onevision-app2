@@ -500,6 +500,28 @@ def _consultar_ids_por_codigo(db: Session, codigos: list[str]) -> dict[str, int]
     return resultado
 
 
+def _actualizar_progreso_confirmacion(carga_id: int, procesados: int, total: int):
+    """Publica el avance sin confirmar la transacción que aplica los bienes."""
+    progreso = 95 if total == 0 else min(95, 15 + int(procesados * 80 / total))
+    progreso_db = SessionLocal()
+    try:
+        progreso_db.query(CargaPatrimonial).filter(
+            CargaPatrimonial.id == carga_id,
+            CargaPatrimonial.estado == "Procesando",
+        ).update({
+            CargaPatrimonial.progreso: progreso,
+            CargaPatrimonial.mensaje_progreso: (
+                f"Aplicando bienes por bloques: {procesados} de {total}."
+            ),
+        }, synchronize_session=False)
+        progreso_db.commit()
+    except Exception:
+        # El avance es informativo. Su fallo no debe interrumpir la carga principal.
+        progreso_db.rollback()
+    finally:
+        progreso_db.close()
+
+
 def confirmar_carga_patrimonial(carga_id: int):
     """Aplica una carga validada sin perder correcciones ni versiones anteriores."""
     db = SessionLocal()
@@ -512,157 +534,179 @@ def confirmar_carga_patrimonial(carga_id: int):
         carga.mensaje_progreso = "Preparando los bienes validados."
         db.commit()
 
-        filas = db.query(BienCargaPatrimonial).filter(
+        total_filas = db.query(BienCargaPatrimonial.id).filter(
             BienCargaPatrimonial.carga_id == carga.id
-        ).order_by(BienCargaPatrimonial.id).all()
+        ).count()
         carga.progreso = 15
-        carga.mensaje_progreso = f"Aplicando {len(filas)} resultados validados."
+        carga.mensaje_progreso = f"Aplicando {total_filas} resultados validados."
         db.commit()
-        codigos_presentes = [f.codigo_patrimonial for f in filas if f.clasificacion != "No incluido"]
-        existentes = {
-            bien.codigo_patrimonial: bien
-            for bien in db.query(BienPatrimonial).all()
-        }
-
-        nuevos = []
-        for fila in filas:
-            if fila.clasificacion != "Nuevo":
-                continue
-            datos = json.loads(fila.datos_comparables)
-            nuevos.append({
-                **_modelo_desde_comparables(datos),
-                "datos_importados": fila.datos_comparables,
-                "datos_fuente": fila.datos_fuente,
-                "ultima_carga_id": carga.id,
-                "creado_en": datetime.utcnow(),
-                "actualizado_en": datetime.utcnow(),
-            })
-        for inicio in range(0, len(nuevos), TAMANO_LOTE):
-            db.bulk_insert_mappings(BienPatrimonial, nuevos[inicio:inicio + TAMANO_LOTE])
-        db.flush()
-
-        ids_por_codigo = _consultar_ids_por_codigo(
-            db, [fila.codigo_patrimonial for fila in filas]
-        )
-        ids_existentes = list(ids_por_codigo.values())
-        correcciones = defaultdict(dict)
-        if ids_existentes:
-            for correccion in db.query(CorreccionBienPatrimonial).filter(
-                CorreccionBienPatrimonial.activa == 1,
-            ).all():
-                correcciones[correccion.bien_id][correccion.campo] = correccion
-
+        publicar_progreso = db.bind.dialect.name == "postgresql"
         ahora = datetime.utcnow()
-        actualizaciones = []
-        versiones_pendientes = []
-        cambios_por_bien: dict[int, list[dict]] = {}
-        conflictos = []
-        enlaces_fila = []
-
-        for fila in filas:
-            bien_id = ids_por_codigo.get(fila.codigo_patrimonial)
-            if bien_id:
-                enlaces_fila.append({"id": fila.id, "bien_id": bien_id})
-            if fila.clasificacion == "No incluido":
-                continue
-
-            datos_nuevos = json.loads(fila.datos_comparables)
-            if fila.clasificacion == "Nuevo":
-                versiones_pendientes.append({
-                    "bien_id": bien_id,
-                    "carga_id": carga.id,
-                    "origen": "Importación",
-                    "usuario": carga.usuario_carga,
-                    "creado_en": ahora,
-                    "snapshot": fila.datos_comparables,
-                })
-                continue
-
-            bien = existentes.get(fila.codigo_patrimonial)
-            if bien is None:
-                bien = db.get(BienPatrimonial, bien_id)
-            datos_anteriores = json.loads(bien.datos_importados)
-            cambios = diferencias(datos_anteriores, datos_nuevos)
-            mapping = {
-                "id": bien.id,
-                "datos_importados": fila.datos_comparables,
-                "datos_fuente": fila.datos_fuente,
-                "ultima_carga_id": carga.id,
-                "actualizado_en": ahora,
+        ultimo_id = 0
+        procesados = 0
+        while True:
+            filas = db.query(
+                BienCargaPatrimonial.id,
+                BienCargaPatrimonial.codigo_patrimonial,
+                BienCargaPatrimonial.clasificacion,
+                BienCargaPatrimonial.datos_comparables,
+                BienCargaPatrimonial.datos_fuente,
+            ).filter(
+                BienCargaPatrimonial.carga_id == carga.id,
+                BienCargaPatrimonial.id > ultimo_id,
+            ).order_by(BienCargaPatrimonial.id).limit(TAMANO_LOTE).all()
+            if not filas:
+                break
+            ultimo_id = filas[-1].id
+            codigos = [fila.codigo_patrimonial for fila in filas]
+            existentes = {
+                bien.codigo_patrimonial: bien
+                for bien in db.query(BienPatrimonial).filter(
+                    BienPatrimonial.codigo_patrimonial.in_(codigos)
+                ).all()
             }
-            activas = correcciones.get(bien.id, {})
-            for campo in CAMPOS:
-                correccion = activas.get(campo)
-                valor_siga_nuevo = datos_nuevos.get(campo)
-                valor_siga_anterior = datos_anteriores.get(campo)
-                if correccion is None:
-                    mapping[campo] = deserializar_valor(campo, valor_siga_nuevo)
-                elif valor_siga_nuevo == correccion.valor_nuevo:
-                    correccion.activa = 0
-                    correccion.cerrada_en = ahora
-                    mapping[campo] = deserializar_valor(campo, valor_siga_nuevo)
-                elif valor_siga_nuevo != valor_siga_anterior:
-                    conflictos.append(ConflictoBienPatrimonial(
-                        bien_id=bien.id,
-                        carga_id=carga.id,
-                        correccion_id=correccion.id,
-                        campo=campo,
-                        valor_siga_anterior=valor_visible(valor_siga_anterior),
-                        valor_siga_nuevo=valor_visible(valor_siga_nuevo),
-                        valor_manual=correccion.valor_nuevo,
-                    ))
-            actualizaciones.append(mapping)
-            if fila.clasificacion == "Actualizado":
-                snapshot = dict(datos_nuevos)
-                for campo, correccion in activas.items():
-                    if correccion.activa:
-                        snapshot[campo] = correccion.valor_nuevo
-                versiones_pendientes.append({
-                    "bien_id": bien.id,
-                    "carga_id": carga.id,
-                    "origen": "Importación",
-                    "usuario": carga.usuario_carga,
+
+            nuevos = []
+            for fila in filas:
+                if fila.clasificacion != "Nuevo":
+                    continue
+                datos = json.loads(fila.datos_comparables)
+                nuevos.append({
+                    **_modelo_desde_comparables(datos),
+                    "datos_importados": fila.datos_comparables,
+                    "datos_fuente": fila.datos_fuente,
+                    "ultima_carga_id": carga.id,
                     "creado_en": ahora,
-                    "snapshot": json.dumps(snapshot, ensure_ascii=False),
+                    "actualizado_en": ahora,
                 })
-                cambios_por_bien[bien.id] = cambios
+            if nuevos:
+                db.bulk_insert_mappings(BienPatrimonial, nuevos)
+                db.flush()
 
-        for inicio in range(0, len(actualizaciones), TAMANO_LOTE):
-            db.bulk_update_mappings(BienPatrimonial, actualizaciones[inicio:inicio + TAMANO_LOTE])
-        for inicio in range(0, len(enlaces_fila), TAMANO_LOTE):
-            db.bulk_update_mappings(BienCargaPatrimonial, enlaces_fila[inicio:inicio + TAMANO_LOTE])
-        if conflictos:
-            db.add_all(conflictos)
-        for inicio in range(0, len(versiones_pendientes), TAMANO_LOTE):
-            db.bulk_insert_mappings(
-                VersionBienPatrimonial,
-                versiones_pendientes[inicio:inicio + TAMANO_LOTE],
-            )
-        db.flush()
+            ids_por_codigo = _consultar_ids_por_codigo(db, codigos)
+            ids_existentes = list(ids_por_codigo.values())
+            correcciones = defaultdict(dict)
+            if ids_existentes:
+                for correccion in db.query(CorreccionBienPatrimonial).filter(
+                    CorreccionBienPatrimonial.activa == 1,
+                    CorreccionBienPatrimonial.bien_id.in_(ids_existentes),
+                ).all():
+                    correcciones[correccion.bien_id][correccion.campo] = correccion
 
-        versiones_ids = {
-            bien_id: version_id
-            for bien_id, version_id in db.query(
-                VersionBienPatrimonial.bien_id, VersionBienPatrimonial.id
-            ).filter(VersionBienPatrimonial.carga_id == carga.id).all()
-        }
-        cambios_insertar = []
-        for bien_id, cambios in cambios_por_bien.items():
-            version_id = versiones_ids.get(bien_id)
-            if not version_id:
-                continue
-            for cambio in cambios:
-                cambios_insertar.append({
-                    "version_id": version_id,
-                    "campo": cambio["campo"],
-                    "valor_anterior": valor_visible(cambio["valor_anterior"]),
-                    "valor_nuevo": valor_visible(cambio["valor_nuevo"]),
-                })
-        for inicio in range(0, len(cambios_insertar), TAMANO_LOTE):
-            db.bulk_insert_mappings(
-                CambioBienPatrimonial,
-                cambios_insertar[inicio:inicio + TAMANO_LOTE],
-            )
+            actualizaciones = []
+            versiones_pendientes = []
+            cambios_por_bien: dict[int, list[dict]] = {}
+            conflictos = []
+            enlaces_fila = []
+            for fila in filas:
+                bien_id = ids_por_codigo.get(fila.codigo_patrimonial)
+                if bien_id:
+                    enlaces_fila.append({"id": fila.id, "bien_id": bien_id})
+                if fila.clasificacion == "No incluido":
+                    continue
+
+                datos_nuevos = json.loads(fila.datos_comparables)
+                if fila.clasificacion == "Nuevo":
+                    versiones_pendientes.append({
+                        "bien_id": bien_id,
+                        "carga_id": carga.id,
+                        "origen": "Importación",
+                        "usuario": carga.usuario_carga,
+                        "creado_en": ahora,
+                        "snapshot": fila.datos_comparables,
+                    })
+                    continue
+
+                bien = existentes.get(fila.codigo_patrimonial)
+                if bien is None:
+                    bien = db.get(BienPatrimonial, bien_id)
+                datos_anteriores = json.loads(bien.datos_importados)
+                cambios = diferencias(datos_anteriores, datos_nuevos)
+                mapping = {
+                    "id": bien.id,
+                    "datos_importados": fila.datos_comparables,
+                    "datos_fuente": fila.datos_fuente,
+                    "ultima_carga_id": carga.id,
+                    "actualizado_en": ahora,
+                }
+                activas = correcciones.get(bien.id, {})
+                for campo in CAMPOS:
+                    correccion = activas.get(campo)
+                    valor_siga_nuevo = datos_nuevos.get(campo)
+                    valor_siga_anterior = datos_anteriores.get(campo)
+                    if correccion is None:
+                        mapping[campo] = deserializar_valor(campo, valor_siga_nuevo)
+                    elif valor_siga_nuevo == correccion.valor_nuevo:
+                        correccion.activa = 0
+                        correccion.cerrada_en = ahora
+                        mapping[campo] = deserializar_valor(campo, valor_siga_nuevo)
+                    elif valor_siga_nuevo != valor_siga_anterior:
+                        conflictos.append(ConflictoBienPatrimonial(
+                            bien_id=bien.id,
+                            carga_id=carga.id,
+                            correccion_id=correccion.id,
+                            campo=campo,
+                            valor_siga_anterior=valor_visible(valor_siga_anterior),
+                            valor_siga_nuevo=valor_visible(valor_siga_nuevo),
+                            valor_manual=correccion.valor_nuevo,
+                        ))
+                actualizaciones.append(mapping)
+                if fila.clasificacion == "Actualizado":
+                    snapshot = dict(datos_nuevos)
+                    for campo, correccion in activas.items():
+                        if correccion.activa:
+                            snapshot[campo] = correccion.valor_nuevo
+                    versiones_pendientes.append({
+                        "bien_id": bien.id,
+                        "carga_id": carga.id,
+                        "origen": "Importación",
+                        "usuario": carga.usuario_carga,
+                        "creado_en": ahora,
+                        "snapshot": json.dumps(snapshot, ensure_ascii=False),
+                    })
+                    cambios_por_bien[bien.id] = cambios
+
+            if actualizaciones:
+                db.bulk_update_mappings(BienPatrimonial, actualizaciones)
+            if enlaces_fila:
+                db.bulk_update_mappings(BienCargaPatrimonial, enlaces_fila)
+            if conflictos:
+                db.add_all(conflictos)
+            if versiones_pendientes:
+                db.bulk_insert_mappings(VersionBienPatrimonial, versiones_pendientes)
+            db.flush()
+
+            versiones_ids = {}
+            if cambios_por_bien:
+                versiones_ids = {
+                    bien_id: version_id
+                    for bien_id, version_id in db.query(
+                        VersionBienPatrimonial.bien_id,
+                        VersionBienPatrimonial.id,
+                    ).filter(
+                        VersionBienPatrimonial.carga_id == carga.id,
+                        VersionBienPatrimonial.bien_id.in_(list(cambios_por_bien)),
+                    ).all()
+                }
+            cambios_insertar = []
+            for bien_id, cambios in cambios_por_bien.items():
+                version_id = versiones_ids.get(bien_id)
+                if not version_id:
+                    continue
+                for cambio in cambios:
+                    cambios_insertar.append({
+                        "version_id": version_id,
+                        "campo": cambio["campo"],
+                        "valor_anterior": valor_visible(cambio["valor_anterior"]),
+                        "valor_nuevo": valor_visible(cambio["valor_nuevo"]),
+                    })
+            if cambios_insertar:
+                db.bulk_insert_mappings(CambioBienPatrimonial, cambios_insertar)
+            db.flush()
+
+            procesados += len(filas)
+            if publicar_progreso:
+                _actualizar_progreso_confirmacion(carga.id, procesados, total_filas)
 
         carga.estado = "Completada"
         carga.confirmado_en = ahora

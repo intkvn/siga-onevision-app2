@@ -34,8 +34,12 @@ from app.services.excel_inventario_impresion import importar_reporte_inventario
 from app.services.pagination import paginas_visibles, rango_registros
 from app.services.pdf_etiquetas import clasificar_bienes_impresion, generar_pdf_etiquetas
 from app.services.solicitudes_impresion import (
+    ESTADO_AREA_PENDIENTE,
     ESTADO_SINCRONIZACION,
+    MENSAJE_AREA_PENDIENTE,
     actualizar_estado_solicitud,
+    es_sede_administrativa_diresa,
+    requiere_actualizar_area,
 )
 
 
@@ -132,14 +136,27 @@ def _ultima_impresion(bien):
 
 
 def _adaptar_bien_pdf(bien):
+    ubicacion = (
+        bien.area
+        if es_sede_administrativa_diresa(bien)
+        else bien.establecimiento
+    )
     return SimpleNamespace(
         id=bien.id,
         codigo_patrimonial=bien.codigo_patrimonial,
         codigo_qr=bien.codigo_qr,
         ruta_qr=bien.ruta_qr,
         descripcion=bien.descripcion,
-        centro_costo=SimpleNamespace(nombre_depend=bien.establecimiento or ""),
+        centro_costo=SimpleNamespace(nombre_depend=ubicacion or ""),
     )
+
+
+def _razon_exclusion_control_impresion(bien) -> str | None:
+    if requiere_actualizar_area(bien):
+        return MENSAJE_AREA_PENDIENTE
+    adaptado = _adaptar_bien_pdf(bien)
+    excluidos = clasificar_bienes_impresion([adaptado])[1]
+    return excluidos[0]["razon"] if excluidos else None
 
 
 def _marcar_pdf_generado(db: Session, lote: LoteImpresionInventario):
@@ -319,6 +336,7 @@ def control_impresion(
         "tipos": {"Activo fijo": 0, "Sobrante": 0},
         "solicitudes_pendientes": 0,
         "solicitudes_sincronizacion": 0,
+        "solicitudes_area_pendiente": 0,
         "pagina": 1,
         "total_paginas": 1,
         "paginas": [1],
@@ -356,6 +374,7 @@ def control_impresion(
             "bien": bien,
             "estado": _estado_bien(bien),
             "ultima_impresion": _ultima_impresion(bien),
+            "area_pendiente": requiere_actualizar_area(bien),
         }
         for bien in bienes
     ]
@@ -407,6 +426,11 @@ def control_impresion(
             ItemSolicitudImpresionInventario
         ).filter(
             ItemSolicitudImpresionInventario.estado == ESTADO_SINCRONIZACION
+        ).count(),
+        "solicitudes_area_pendiente": db.query(
+            ItemSolicitudImpresionInventario
+        ).filter(
+            ItemSolicitudImpresionInventario.estado == ESTADO_AREA_PENDIENTE
         ).count(),
         "resumen_establecimientos": _resumen_establecimientos(base),
         "lotes": (
@@ -541,10 +565,15 @@ def crear_lote_impresion(
             status_code=303,
         )
 
-    adaptados = [_adaptar_bien_pdf(bien) for bien in bienes]
-    imprimibles, excluidos = clasificar_bienes_impresion(adaptados)
-    ids_imprimibles = {bien.id for bien in imprimibles}
-    bienes = [bien for bien in bienes if bien.id in ids_imprimibles]
+    excluidos = []
+    bienes_imprimibles = []
+    for bien in bienes:
+        razon = _razon_exclusion_control_impresion(bien)
+        if razon:
+            excluidos.append({"bien": bien, "razon": razon})
+        else:
+            bienes_imprimibles.append(bien)
+    bienes = bienes_imprimibles
     if not bienes:
         return RedirectResponse(
             url=f"/control-impresion?inventario_id={inventario_id}&error="
@@ -607,6 +636,10 @@ def solicitudes_inventariadores(
         item for solicitud in solicitudes for item in solicitud.items
         if item.estado == ESTADO_SINCRONIZACION
     ]
+    esperando_area = [
+        item for solicitud in solicitudes for item in solicitud.items
+        if item.estado == ESTADO_AREA_PENDIENTE
+    ]
     return templates.TemplateResponse(
         "control_impresion_solicitudes.html",
         {
@@ -614,6 +647,7 @@ def solicitudes_inventariadores(
             "solicitudes": solicitudes,
             "pendientes": pendientes,
             "esperando": esperando,
+            "esperando_area": esperando_area,
             "max_bienes_lote": MAX_BIENES_POR_LOTE,
         },
     )
@@ -677,10 +711,13 @@ def crear_lote_desde_solicitudes(
             item.estado = "Observado"
             item.motivo_observacion = "El mismo bien fue incluido más de una vez."
             continue
-        razon = clasificar_bienes_impresion([_adaptar_bien_pdf(item.bien)])[1]
+        razon = _razon_exclusion_control_impresion(item.bien)
         if razon:
-            item.estado = "Observado"
-            item.motivo_observacion = razon[0]["razon"]
+            if requiere_actualizar_area(item.bien):
+                item.estado = ESTADO_AREA_PENDIENTE
+            else:
+                item.estado = "Observado"
+            item.motivo_observacion = razon
             continue
         bienes_vistos.add(item.bien_id)
         seleccionados.append(item)
@@ -743,6 +780,14 @@ def detalle_lote_impresion(
     if lote is None:
         raise HTTPException(status_code=404, detail="Lote no encontrado.")
     impresos = sum(1 for item in lote.items if item.impreso_en)
+    faltantes_area = sum(
+        1 for item in lote.items
+        if item.impreso_en is None and requiere_actualizar_area(item.bien)
+    )
+    items_area_pendiente = {
+        item.id for item in lote.items
+        if item.impreso_en is None and requiere_actualizar_area(item.bien)
+    }
     return templates.TemplateResponse(
         "control_impresion_lote.html",
         {
@@ -750,6 +795,8 @@ def detalle_lote_impresion(
             "lote": lote,
             "impresos": impresos,
             "pendientes": len(lote.items) - impresos,
+            "faltantes_area": faltantes_area,
+            "items_area_pendiente": items_area_pendiente,
         },
     )
 
@@ -771,6 +818,22 @@ def pdf_lote_impresion(
     )
     if lote is None:
         raise HTTPException(status_code=404, detail="Lote no encontrado.")
+    faltantes_area = [
+        item.bien.codigo_qr
+        for item in lote.items
+        if item.impreso_en is None and requiere_actualizar_area(item.bien)
+    ]
+    if faltantes_area:
+        codigos = ", ".join(faltantes_area[:10])
+        if len(faltantes_area) > 10:
+            codigos += f" y {len(faltantes_area) - 10} más"
+        return RedirectResponse(
+            url=f"/control-impresion/lotes/{lote_id}?error=" + quote_plus(
+                "No se puede generar el PDF. Falta actualizar el área de los "
+                f"QR: {codigos}."
+            ),
+            status_code=303,
+        )
     bienes = [_adaptar_bien_pdf(item.bien) for item in lote.items]
     perfil = _obtener_perfil_impresion(db)
     contenido = generar_pdf_etiquetas(bienes, perfil)
@@ -896,6 +959,22 @@ def confirmar_impresion_lote(
         consulta = consulta.filter(ItemLoteImpresionInventario.id.in_(set(item_ids)))
     elif alcance != "todo":
         raise HTTPException(status_code=400, detail="Alcance no válido.")
+
+    faltantes_area = [
+        item.bien.codigo_qr
+        for item in consulta.options(
+            joinedload(ItemLoteImpresionInventario.bien)
+        ).all()
+        if item.impreso_en is None and requiere_actualizar_area(item.bien)
+    ]
+    if faltantes_area:
+        return RedirectResponse(
+            url=f"/control-impresion/lotes/{lote_id}?error=" + quote_plus(
+                "No se puede confirmar la impresión mientras existan bienes "
+                "de DIRESA - CAJAMARCA sin área actualizada."
+            ),
+            status_code=303,
+        )
 
     actualizados = _confirmar_items_impresos(db, lote, consulta)
     return RedirectResponse(

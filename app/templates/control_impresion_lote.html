@@ -24,10 +24,16 @@
 </div>
 
 <div class="d-flex flex-wrap gap-2 mb-4">
-    <a class="btn btn-primary" href="/control-impresion/lotes/{{ lote.id }}/pdf" target="_blank">Generar / abrir PDF</a>
+    <a class="btn btn-primary {{ 'disabled' if faltantes_area else '' }}" href="/control-impresion/lotes/{{ lote.id }}/pdf" target="_blank" {% if faltantes_area %}aria-disabled="true" tabindex="-1"{% endif %}>Generar / abrir PDF</a>
     <a class="btn btn-success" href="/control-impresion/lotes/{{ lote.id }}/excel">Descargar Excel de control</a>
     <a class="btn btn-outline-secondary" href="/control-impresion?inventario_id={{ lote.inventario_id }}">Volver al inventario</a>
 </div>
+
+{% if faltantes_area %}
+<div class="alert alert-warning">
+    {{ faltantes_area }} bien(es) de DIRESA - CAJAMARCA todavía no tienen área. Actualiza One Vision y carga el reporte antes de generar el PDF.
+</div>
+{% endif %}
 
 {% if not lote.pdf_generado_en %}
 <div class="alert alert-warning">Abre el PDF antes de confirmar la impresión física.</div>
@@ -55,7 +61,7 @@
                     {% for item in lote.items %}
                         {% set bien = item.bien %}
                         <tr>
-                            <td class="ps-3"><input class="form-check-input item-lote" type="checkbox" name="item_ids" value="{{ item.id }}" {{ "disabled" if item.impreso_en else "" }}></td>
+                            <td class="ps-3"><input class="form-check-input item-lote" type="checkbox" name="item_ids" value="{{ item.id }}" {{ "disabled" if item.impreso_en or item.id in items_area_pendiente else "" }}></td>
                             <td>{{ bien.codigo_patrimonial }}</td>
                             <td>{{ bien.codigo_qr or "-" }}</td>
                             <td>{{ bien.descripcion }}</td>

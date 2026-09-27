@@ -55,7 +55,8 @@ from app.services.pdf_etiquetas import (
     numero_paginas_para_bienes,
 )
 from app.services.solicitudes_impresion import (
-    ESTADO_SINCRONIZACION, crear_solicitud, normalizar_lista_qr,
+    ESTADO_AREA_PENDIENTE, ESTADO_SINCRONIZACION, crear_solicitud,
+    normalizar_lista_qr, reconciliar_solicitudes_pendientes,
     validar_qrs_solicitud,
 )
 from app.services.pdf_ficha_patrimonial import generar_ficha_activo_pdf
@@ -63,8 +64,8 @@ from app.routers.verificacion import (
     ESTADO_CORRECTA, ESTADO_INCORRECTA, _filas_verificacion,
 )
 from app.routers.control_impresion import (
-    _confirmar_items_impresos, _estado_bien, _marcar_pdf_generado,
-    _opciones_distintas,
+    _adaptar_bien_pdf, _confirmar_items_impresos, _estado_bien,
+    _marcar_pdf_generado, _opciones_distintas,
 )
 from app.routers.maestro_patrimonial import (
     _aplicar_filtros, _datos_firmante, _resumen_calidad_datos,
@@ -1228,6 +1229,123 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         self.assertEqual(solicitud.items[0].bien_id, bien.id)
         self.assertEqual(solicitud.items[0].estado, "Pendiente")
         self.assertEqual(solicitud.estado, "Pendiente")
+
+    def test_diresa_sin_area_espera_actualizacion_y_muestra_area_en_sticker(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        usuario = UsuarioAplicacion(
+            username="inventariador-area", nombre_completo="INVENTARIADOR AREA",
+            password_hash="hash", rol="Inventariador",
+        )
+        bien = BienInventarioImpresion(
+            inventario=inventario, codigo_patrimonial=None, codigo_qr="27",
+            tipo_bien="Sobrante", ruta_qr="https://sir.example/qr/equipo/27",
+            descripcion="ESCRITORIO", establecimiento="  diresa-cajamarca  ",
+            area=None, imprimible=1,
+        )
+        self.db.add_all([inventario, usuario, bien])
+        self.db.commit()
+
+        validacion = validar_qrs_solicitud(self.db, inventario.id, ["27"])
+        self.assertEqual(validacion[0]["estado"], ESTADO_AREA_PENDIENTE)
+        solicitud = crear_solicitud(
+            self.db, inventario.id, usuario.id, ["27"]
+        )
+        self.assertEqual(solicitud.estado, "Esperando actualización")
+        self.assertEqual(solicitud.items[0].estado, ESTADO_AREA_PENDIENTE)
+
+        ruta_sin_area = self._reporte([[
+            None, "27", "https://sir.example/qr/equipo/27", "ESCRITORIO",
+            "DIRESA - CAJAMARCA", "NO PERTENECE A NINGUNA", None,
+            None, None, None, None,
+        ]])
+        importar_reporte_inventario(
+            self.db, ruta_sin_area, "reporte_sin_area.xlsx", anio="2026"
+        )
+        self.db.refresh(solicitud.items[0])
+        self.assertEqual(solicitud.items[0].estado, ESTADO_AREA_PENDIENTE)
+
+        ruta = self._reporte([[
+            None, "27", "https://sir.example/qr/equipo/27", "ESCRITORIO",
+            "DIRESA - CAJAMARCA", "NO PERTENECE A NINGUNA", "PATRIMONIO",
+            None, None, None, None,
+        ]])
+        importar_reporte_inventario(
+            self.db, ruta, "reporte_area.xlsx", anio="2026"
+        )
+        self.db.refresh(bien)
+        self.db.refresh(solicitud)
+        self.db.refresh(solicitud.items[0])
+
+        self.assertEqual(bien.area, "PATRIMONIO")
+        self.assertEqual(solicitud.items[0].estado, "Pendiente")
+        self.assertEqual(solicitud.estado, "Pendiente")
+        self.assertEqual(
+            _adaptar_bien_pdf(bien).centro_costo.nombre_depend,
+            "PATRIMONIO",
+        )
+
+    def test_fuera_de_diresa_el_area_sigue_siendo_opcional_en_control_impresion(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        bien = BienInventarioImpresion(
+            inventario=inventario, codigo_patrimonial=None, codigo_qr="28",
+            tipo_bien="Sobrante", ruta_qr="https://sir.example/qr/equipo/28",
+            descripcion="SILLA", establecimiento="P.S. CALLANCAS",
+            area=None, imprimible=1,
+        )
+        self.db.add_all([inventario, bien])
+        self.db.commit()
+
+        validacion = validar_qrs_solicitud(self.db, inventario.id, ["28"])
+
+        self.assertEqual(validacion[0]["estado"], "Disponible")
+        self.assertEqual(
+            _adaptar_bien_pdf(bien).centro_costo.nombre_depend,
+            "P.S. CALLANCAS",
+        )
+
+    def test_bien_en_lote_espera_area_y_regresa_al_mismo_lote(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        usuario = UsuarioAplicacion(
+            username="inventariador-lote", nombre_completo="INVENTARIADOR LOTE",
+            password_hash="hash", rol="Inventariador",
+        )
+        bien = BienInventarioImpresion(
+            inventario=inventario, codigo_patrimonial=None, codigo_qr="29",
+            tipo_bien="Sobrante", ruta_qr="https://sir.example/qr/equipo/29",
+            descripcion="MESA", establecimiento="DIRESA - CAJAMARCA",
+            area="LOGÍSTICA", imprimible=1,
+        )
+        self.db.add_all([inventario, usuario, bien])
+        self.db.commit()
+        solicitud = crear_solicitud(
+            self.db, inventario.id, usuario.id, ["29"]
+        )
+        lote = LoteImpresionInventario(
+            inventario_id=inventario.id, estado="Preparado", total_bienes=1,
+        )
+        item_lote = ItemLoteImpresionInventario(
+            lote=lote, bien=bien, solicitud_item=solicitud.items[0],
+        )
+        solicitud.items[0].estado = "En lote"
+        self.db.add_all([lote, item_lote])
+        self.db.commit()
+
+        bien.area = None
+        reconciliar_solicitudes_pendientes(self.db, inventario.id)
+        self.db.commit()
+        self.assertEqual(solicitud.items[0].estado, ESTADO_AREA_PENDIENTE)
+
+        bien.area = "LOGÍSTICA"
+        reconciliar_solicitudes_pendientes(self.db, inventario.id)
+        self.db.commit()
+        self.assertEqual(solicitud.items[0].estado, "En lote")
+        self.assertEqual(solicitud.items[0].item_lote.id, item_lote.id)
 
     def test_solicitud_pasa_a_lista_y_luego_exige_confirmar_reimpresion(self):
         inventario = InventarioImpresion(

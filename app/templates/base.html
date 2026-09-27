@@ -10,7 +10,7 @@
     {% if request.session.get("logueado") %}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
         <div class="container">
-            <a class="navbar-brand" href="{{ '/inventariador' if request.session.get('rol') == 'Inventariador' else '/' }}">SIGA → One Visión</a>
+            <a class="navbar-brand" href="{{ '/inventariador' if request.session.get('rol') == 'Inventariador' else '/' }}">Gestión QR</a>
             <div class="navbar-nav">
                 {% if request.session.get("rol") == "Inventariador" %}
                 <a class="nav-link" href="/inventariador">Solicitar stickers</a>

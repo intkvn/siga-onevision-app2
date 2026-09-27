@@ -13,14 +13,44 @@ from app.models import (
 
 
 ESTADO_SINCRONIZACION = "Pendiente de sincronización"
+ESTADO_AREA_PENDIENTE = "Pendiente de actualización de área"
 MENSAJE_SINCRONIZACION = (
     "Aún no aparece en el último reporte cargado. Se vinculará "
     "automáticamente al actualizar One Vision."
 )
+MENSAJE_AREA_PENDIENTE = (
+    "QR sin area, actualiza en One Vision"
+)
+ESTABLECIMIENTO_AREA_OBLIGATORIA = "DIRESA - CAJAMARCA"
 MOTIVO_NO_ENCONTRADO_ANTERIOR = "QR no encontrado en el inventario vigente."
 ESTADOS_ACTIVOS_ITEM = (
     "Pendiente", "En lote", "Listo para recojo", ESTADO_SINCRONIZACION,
+    ESTADO_AREA_PENDIENTE,
 )
+
+
+def _normalizar_ubicacion(valor) -> str:
+    texto = " ".join(str(valor or "").strip().upper().split())
+    return re.sub(r"\s*-\s*", " - ", texto)
+
+
+def es_sede_administrativa_diresa(
+    bien: BienInventarioImpresion | None,
+) -> bool:
+    if bien is None:
+        return False
+    return (
+        _normalizar_ubicacion(bien.establecimiento)
+        == ESTABLECIMIENTO_AREA_OBLIGATORIA
+    )
+
+
+def requiere_actualizar_area(bien: BienInventarioImpresion | None) -> bool:
+    """Exige área solo a los bienes de la sede administrativa DIRESA."""
+    return (
+        es_sede_administrativa_diresa(bien)
+        and not str(bien.area or "").strip()
+    )
 
 
 def normalizar_codigo_qr(valor) -> str:
@@ -47,9 +77,11 @@ def actualizar_estado_solicitud(solicitud: SolicitudImpresionInventario) -> str:
     validos = [estado for estado in estados if estado != "Observado"]
     observados = estados.count("Observado")
     sincronizando = validos.count(ESTADO_SINCRONIZACION)
+    esperando_area = validos.count(ESTADO_AREA_PENDIENTE)
+    esperando_actualizacion = sincronizando + esperando_area
     if not validos:
         estado = "Observado"
-    elif sincronizando == len(validos):
+    elif esperando_actualizacion == len(validos):
         estado = "Esperando actualización"
     elif all(valor == "Recogido" for valor in validos):
         estado = "Recogido con observados" if observados else "Recogido"
@@ -60,9 +92,14 @@ def actualizar_estado_solicitud(solicitud: SolicitudImpresionInventario) -> str:
     elif any(valor == "Listo para recojo" for valor in validos):
         estado = "Atención parcial"
     elif any(valor == "En lote" for valor in validos):
-        estado = "En lote con sincronización" if sincronizando else "En lote"
+        estado = (
+            "En lote con actualización" if esperando_actualizacion else "En lote"
+        )
     elif any(valor == "Pendiente" for valor in validos):
-        estado = "Pendiente con sincronización" if sincronizando else "Pendiente"
+        estado = (
+            "Pendiente con actualización"
+            if esperando_actualizacion else "Pendiente"
+        )
     else:
         estado = "Atención parcial"
     solicitud.estado = estado
@@ -122,6 +159,15 @@ def validar_qrs_solicitud(
             })
             continue
         bien = bienes[0]
+        if requiere_actualizar_area(bien):
+            resultados.append({
+                "codigo_qr": codigo,
+                "estado": ESTADO_AREA_PENDIENTE,
+                "motivo": MENSAJE_AREA_PENDIENTE,
+                "bien": bien,
+                "requiere_reimpresion": False,
+            })
+            continue
         if not bien.imprimible:
             resultados.append({
                 "codigo_qr": codigo,
@@ -171,6 +217,9 @@ def crear_solicitud(
         elif resultado["estado"] == "Esperando actualización":
             estado = ESTADO_SINCRONIZACION
             motivo = MENSAJE_SINCRONIZACION
+        elif resultado["estado"] == ESTADO_AREA_PENDIENTE:
+            estado = ESTADO_AREA_PENDIENTE
+            motivo = MENSAJE_AREA_PENDIENTE
         elif reimpresion and resultado["codigo_qr"] not in reimpresiones_confirmadas:
             estado = "Observado"
             motivo = "La reimpresión no fue confirmada."
@@ -201,7 +250,12 @@ def reconciliar_solicitudes_pendientes(
         .filter(
             SolicitudImpresionInventario.inventario_id == inventario_id,
             or_(
-                ItemSolicitudImpresionInventario.estado == ESTADO_SINCRONIZACION,
+                ItemSolicitudImpresionInventario.estado.in_((
+                    ESTADO_SINCRONIZACION,
+                    ESTADO_AREA_PENDIENTE,
+                    "Pendiente",
+                    "En lote",
+                )),
                 (
                     (ItemSolicitudImpresionInventario.estado == "Observado")
                     & (
@@ -217,6 +271,7 @@ def reconciliar_solicitudes_pendientes(
     vinculados = 0
     observados = 0
     esperando = 0
+    esperando_area = 0
     for item in items:
         solicitudes_afectadas.add(item.solicitud_id)
         bienes = db.query(BienInventarioImpresion).filter(
@@ -240,10 +295,18 @@ def reconciliar_solicitudes_pendientes(
             continue
         bien = bienes[0]
         item.bien_id = bien.id
-        if not bien.imprimible:
+        if requiere_actualizar_area(bien):
+            item.estado = ESTADO_AREA_PENDIENTE
+            item.motivo_observacion = MENSAJE_AREA_PENDIENTE
+            esperando_area += 1
+        elif not bien.imprimible:
             item.estado = "Observado"
             item.motivo_observacion = bien.motivo_bloqueo or "El bien no es imprimible."
             observados += 1
+        elif item.item_lote is not None and item.item_lote.impreso_en is None:
+            item.estado = "En lote"
+            item.motivo_observacion = None
+            vinculados += 1
         elif bien.estado_impresion == "Impreso":
             item.estado = "Observado"
             item.motivo_observacion = (
@@ -268,4 +331,5 @@ def reconciliar_solicitudes_pendientes(
         "vinculados": vinculados,
         "observados": observados,
         "esperando": esperando,
+        "esperando_area": esperando_area,
     }

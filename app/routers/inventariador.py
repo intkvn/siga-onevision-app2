@@ -15,6 +15,7 @@ from app.models import (
     SolicitudImpresionInventario,
 )
 from app.services.solicitudes_impresion import (
+    ESTADO_AREA_PENDIENTE,
     ESTADO_SINCRONIZACION,
     actualizar_estado_solicitud,
     crear_solicitud,
@@ -75,6 +76,10 @@ def _contexto_portal(
         "esperando": sum(
             1 for solicitud in solicitudes for item in solicitud.items
             if item.estado == ESTADO_SINCRONIZACION
+        ),
+        "esperando_area": sum(
+            1 for solicitud in solicitudes for item in solicitud.items
+            if item.estado == ESTADO_AREA_PENDIENTE
         ),
     }
 

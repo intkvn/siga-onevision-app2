@@ -9,6 +9,7 @@
         <p class="text-muted mb-0">Universo anual de activos fijos y sobrantes, con seguimiento de impresión.</p>
     </div>
     <div class="d-flex gap-2 align-items-center">
+        {% if solicitudes_area_pendiente %}<a class="btn btn-outline-warning" href="/control-impresion/solicitudes">{{ solicitudes_area_pendiente }} QR sin área</a>{% endif %}
         {% if solicitudes_sincronizacion %}<a class="btn btn-outline-warning" href="/control-impresion/solicitudes">{{ solicitudes_sincronizacion }} QR esperando reporte</a>{% endif %}
         {% if solicitudes_pendientes %}<a class="btn btn-warning" href="/control-impresion/solicitudes">{{ solicitudes_pendientes }} QR solicitado(s) pendiente(s)</a>{% else %}<a class="btn btn-outline-primary" href="/control-impresion/solicitudes">Solicitudes de inventariadores</a>{% endif %}
         {% if inventario %}<span class="badge text-bg-dark fs-6">{{ inventario.nombre }}</span>{% endif %}
@@ -184,9 +185,14 @@
                                 {% endif %}
                             </td>
                             <td>
+                                {% if fila.area_pendiente %}
+                                <span class="badge text-bg-warning">Falta área</span>
+                                <div class="small text-warning">No disponible para impresión</div>
+                                {% else %}
                                 {% set clase = {"Pendiente":"secondary", "Sticker generado":"primary", "Impreso":"success", "Bloqueado":"danger"}.get(fila.estado, "secondary") %}
                                 <span class="badge text-bg-{{ clase }}">{{ fila.estado }}</span>
                                 {% if fila.estado == "Bloqueado" %}<div class="small text-danger">{{ bien.motivo_bloqueo }}</div>{% endif %}
+                                {% endif %}
                             </td>
                             <td>{{ fila.ultima_impresion.strftime("%d/%m/%Y %H:%M") if fila.ultima_impresion else "-" }}</td>
                         </tr>

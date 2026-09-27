@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     BienInventarioImpresion,
+    ItemLoteImpresionInventario,
     ItemSolicitudImpresionInventario,
     SolicitudImpresionInventario,
 )
@@ -27,6 +28,10 @@ ESTADOS_ACTIVOS_ITEM = (
     "Pendiente", "En lote", "Listo para recojo", ESTADO_SINCRONIZACION,
     ESTADO_AREA_PENDIENTE,
 )
+
+
+class SolicitudSinItemsDisponiblesError(ValueError):
+    """Indica que todos los QR ya pertenecen a solicitudes activas."""
 
 
 def _normalizar_ubicacion(valor) -> str:
@@ -126,13 +131,14 @@ def validar_qrs_solicitud(
         if item_activo is not None:
             resultados.append({
                 "codigo_qr": codigo,
-                "estado": "Observado",
+                "estado": "Ya solicitado",
                 "motivo": (
                     f"Ya figura en la solicitud #{item_activo.solicitud_id} "
-                    f"con estado {item_activo.estado}."
+                    f"con estado {item_activo.estado}. No se enviará nuevamente."
                 ),
                 "bien": item_activo.bien,
                 "requiere_reimpresion": False,
+                "omitir_solicitud": True,
             })
             continue
         bienes = db.query(BienInventarioImpresion).filter(
@@ -197,9 +203,20 @@ def crear_solicitud(
     usuario_id: int,
     codigos: list[str],
     reimpresiones_confirmadas: set[str] | None = None,
+    resultados_validados: list[dict] | None = None,
 ) -> SolicitudImpresionInventario:
     reimpresiones_confirmadas = reimpresiones_confirmadas or set()
-    resultados = validar_qrs_solicitud(db, inventario_id, codigos)
+    resultados = resultados_validados or validar_qrs_solicitud(
+        db, inventario_id, codigos
+    )
+    resultados = [
+        resultado for resultado in resultados
+        if not resultado.get("omitir_solicitud", False)
+    ]
+    if not resultados:
+        raise SolicitudSinItemsDisponiblesError(
+            "Los QR ingresados ya figuran en solicitudes activas."
+        )
     solicitud = SolicitudImpresionInventario(
         inventario_id=inventario_id,
         usuario_id=usuario_id,
@@ -223,14 +240,30 @@ def crear_solicitud(
         elif reimpresion and resultado["codigo_qr"] not in reimpresiones_confirmadas:
             estado = "Observado"
             motivo = "La reimpresión no fue confirmada."
-        db.add(ItemSolicitudImpresionInventario(
+        item_solicitud = ItemSolicitudImpresionInventario(
             solicitud_id=solicitud.id,
             bien_id=resultado["bien"].id if resultado["bien"] else None,
             codigo_qr=resultado["codigo_qr"],
             estado=estado,
             motivo_observacion=motivo,
             es_reimpresion=1 if reimpresion and estado == "Pendiente" else 0,
-        ))
+        )
+        db.add(item_solicitud)
+        db.flush()
+        if estado == "Pendiente" and item_solicitud.bien_id is not None:
+            item_lote_abierto = (
+                db.query(ItemLoteImpresionInventario)
+                .filter(
+                    ItemLoteImpresionInventario.bien_id == item_solicitud.bien_id,
+                    ItemLoteImpresionInventario.impreso_en.is_(None),
+                    ItemLoteImpresionInventario.solicitud_item_id.is_(None),
+                )
+                .order_by(ItemLoteImpresionInventario.lote_id.desc())
+                .first()
+            )
+            if item_lote_abierto is not None:
+                item_lote_abierto.solicitud_item_id = item_solicitud.id
+                item_solicitud.estado = "En lote"
     db.flush()
     db.refresh(solicitud)
     actualizar_estado_solicitud(solicitud)

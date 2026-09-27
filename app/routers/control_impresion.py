@@ -151,9 +151,86 @@ def _adaptar_bien_pdf(bien):
     )
 
 
-def _razon_exclusion_control_impresion(bien) -> str | None:
+def _codigos_qr_duplicados(
+    db: Session, inventario_id: int, codigos: list[str] | set[str],
+) -> set[str]:
+    codigos = {codigo for codigo in codigos if codigo}
+    if not codigos:
+        return set()
+    return {
+        codigo for (codigo,) in (
+            db.query(BienInventarioImpresion.codigo_qr)
+            .filter(
+                BienInventarioImpresion.inventario_id == inventario_id,
+                BienInventarioImpresion.activo == 1,
+                BienInventarioImpresion.codigo_qr.in_(codigos),
+            )
+            .group_by(BienInventarioImpresion.codigo_qr)
+            .having(func.count(BienInventarioImpresion.id) > 1)
+            .all()
+        )
+    }
+
+
+def _lotes_abiertos_por_bien(
+    db: Session, bien_ids: list[int] | set[int],
+) -> dict[int, int]:
+    bien_ids = set(bien_ids)
+    if not bien_ids:
+        return {}
+    filas = (
+        db.query(
+            ItemLoteImpresionInventario.bien_id,
+            ItemLoteImpresionInventario.lote_id,
+        )
+        .filter(
+            ItemLoteImpresionInventario.bien_id.in_(bien_ids),
+            ItemLoteImpresionInventario.impreso_en.is_(None),
+        )
+        .order_by(ItemLoteImpresionInventario.lote_id)
+        .all()
+    )
+    return {bien_id: lote_id for bien_id, lote_id in filas}
+
+
+def _solicitudes_pendientes_por_bien(
+    db: Session, inventario_id: int, bien_ids: list[int] | set[int],
+) -> dict[int, list[ItemSolicitudImpresionInventario]]:
+    bien_ids = set(bien_ids)
+    if not bien_ids:
+        return {}
+    items = (
+        db.query(ItemSolicitudImpresionInventario)
+        .join(ItemSolicitudImpresionInventario.solicitud)
+        .filter(
+            SolicitudImpresionInventario.inventario_id == inventario_id,
+            ItemSolicitudImpresionInventario.bien_id.in_(bien_ids),
+            ItemSolicitudImpresionInventario.estado == "Pendiente",
+        )
+        .order_by(ItemSolicitudImpresionInventario.id)
+        .all()
+    )
+    resultado = {}
+    for item in items:
+        resultado.setdefault(item.bien_id, []).append(item)
+    return resultado
+
+
+def _razon_exclusion_control_impresion(
+    bien,
+    *,
+    qr_duplicado: bool = False,
+    lote_abierto: int | None = None,
+    permitir_reimpresion: bool = False,
+) -> str | None:
     if requiere_actualizar_area(bien):
         return MENSAJE_AREA_PENDIENTE
+    if qr_duplicado:
+        return "QR duplicado en el inventario; requiere revisión."
+    if lote_abierto is not None:
+        return f"Ya está incluido en el lote #{lote_abierto}."
+    if bien.estado_impresion == "Impreso" and not permitir_reimpresion:
+        return "El QR ya fue impreso; confirma la reimpresión para generar otro lote."
     adaptado = _adaptar_bien_pdf(bien)
     excluidos = clasificar_bienes_impresion([adaptado])[1]
     return excluidos[0]["razon"] if excluidos else None
@@ -161,10 +238,15 @@ def _razon_exclusion_control_impresion(bien) -> str | None:
 
 def _marcar_pdf_generado(db: Session, lote: LoteImpresionInventario):
     ahora = datetime.utcnow()
-    if lote.pdf_generado_en is None:
-        lote.pdf_generado_en = ahora
-    lote.estado = "Sticker generado"
-    ids_bienes = [item.bien_id for item in lote.items]
+    lote.pdf_generado_en = ahora
+    lote.estado = (
+        "Impreso parcial"
+        if any(item.impreso_en is not None for item in lote.items)
+        else "Sticker generado"
+    )
+    ids_bienes = [
+        item.bien_id for item in lote.items if item.impreso_en is None
+    ]
     if ids_bienes:
         db.query(BienInventarioImpresion).filter(
             BienInventarioImpresion.id.in_(ids_bienes),
@@ -369,12 +451,22 @@ def control_impresion(
         .limit(FILAS_POR_PAGINA)
         .all()
     )
+    qr_duplicados = _codigos_qr_duplicados(
+        db, inventario.id, {bien.codigo_qr for bien in bienes}
+    )
+    lotes_abiertos = _lotes_abiertos_por_bien(
+        db, {bien.id for bien in bienes}
+    )
     filas_bienes = [
         {
             "bien": bien,
             "estado": _estado_bien(bien),
             "ultima_impresion": _ultima_impresion(bien),
             "area_pendiente": requiere_actualizar_area(bien),
+            "qr_duplicado": bool(
+                bien.codigo_qr and bien.codigo_qr in qr_duplicados
+            ),
+            "lote_abierto": lotes_abiertos.get(bien.id),
         }
         for bien in bienes
     ]
@@ -531,6 +623,7 @@ def crear_lote_impresion(
     estado: str = Form(""),
     tipo_bien: str = Form(""),
     q: str = Form(""),
+    confirmar_reimpresion: bool = Form(False),
     db: Session = Depends(get_db),
     _=Depends(requiere_administrador),
 ):
@@ -565,19 +658,50 @@ def crear_lote_impresion(
             status_code=303,
         )
 
+    qr_duplicados = _codigos_qr_duplicados(
+        db, inventario_id, {bien.codigo_qr for bien in bienes}
+    )
+    lotes_abiertos = _lotes_abiertos_por_bien(
+        db, {bien.id for bien in bienes}
+    )
+    solicitudes_por_bien = _solicitudes_pendientes_por_bien(
+        db, inventario_id, {bien.id for bien in bienes}
+    )
     excluidos = []
-    bienes_imprimibles = []
+    seleccionados = []
     for bien in bienes:
-        razon = _razon_exclusion_control_impresion(bien)
+        solicitudes_bien = solicitudes_por_bien.get(bien.id, [])
+        solicitud_item = solicitudes_bien[0] if len(solicitudes_bien) == 1 else None
+        if len(solicitudes_bien) > 1:
+            razon = "Tiene más de una solicitud pendiente y requiere revisión."
+        else:
+            reimpresion_autorizada = bool(
+                solicitud_item and solicitud_item.es_reimpresion
+            )
+            razon = _razon_exclusion_control_impresion(
+                bien,
+                qr_duplicado=bool(
+                    bien.codigo_qr and bien.codigo_qr in qr_duplicados
+                ),
+                lote_abierto=lotes_abiertos.get(bien.id),
+                permitir_reimpresion=(
+                    confirmar_reimpresion or reimpresion_autorizada
+                ),
+            )
         if razon:
             excluidos.append({"bien": bien, "razon": razon})
         else:
-            bienes_imprimibles.append(bien)
-    bienes = bienes_imprimibles
-    if not bienes:
+            seleccionados.append((bien, solicitud_item))
+    if not seleccionados:
+        motivos = list(dict.fromkeys(
+            excluido["razon"] for excluido in excluidos
+        ))
+        detalle = f" Motivo: {'; '.join(motivos[:3])}" if motivos else ""
         return RedirectResponse(
             url=f"/control-impresion?inventario_id={inventario_id}&error="
-                + quote_plus("No hay bienes imprimibles en la selección."),
+                + quote_plus(
+                    "No hay bienes disponibles para crear el lote." + detalle
+                ),
             status_code=303,
         )
 
@@ -588,23 +712,39 @@ def crear_lote_impresion(
         "estado": estado or None,
         "tipo_bien": tipo_bien or None,
         "busqueda": q or None,
+        "reimpresion_confirmada": confirmar_reimpresion,
         "excluidos": len(excluidos),
     }
     lote = LoteImpresionInventario(
         inventario_id=inventario_id,
         estado="Preparado",
         filtros=json.dumps(filtros, ensure_ascii=False),
-        total_bienes=len(bienes),
+        total_bienes=len(seleccionados),
     )
     db.add(lote)
     db.flush()
-    db.bulk_insert_mappings(ItemLoteImpresionInventario, [
-        {"lote_id": lote.id, "bien_id": bien.id} for bien in bienes
-    ])
+    solicitudes_afectadas = set()
+    for bien, solicitud_item in seleccionados:
+        db.add(ItemLoteImpresionInventario(
+            lote_id=lote.id,
+            bien_id=bien.id,
+            solicitud_item_id=solicitud_item.id if solicitud_item else None,
+        ))
+        if solicitud_item:
+            solicitud_item.estado = "En lote"
+            solicitudes_afectadas.add(solicitud_item.solicitud_id)
+    db.flush()
+    for solicitud_id in solicitudes_afectadas:
+        actualizar_estado_solicitud(
+            db.get(SolicitudImpresionInventario, solicitud_id)
+        )
     db.commit()
-    info = f"Lote preparado con {len(bienes)} bienes."
+    info = f"Lote preparado con {len(seleccionados)} bienes."
     if excluidos:
-        info += f" Se excluyeron {len(excluidos)} bienes no imprimibles."
+        info += (
+            f" Se excluyeron {len(excluidos)} bienes por validaciones "
+            "de impresión."
+        )
     return RedirectResponse(
         url=f"/control-impresion/lotes/{lote.id}?info={quote_plus(info)}",
         status_code=303,
@@ -701,6 +841,14 @@ def crear_lote_desde_solicitudes(
     seleccionados = []
     bienes_vistos = set()
     solicitudes_afectadas = set()
+    inventario_id = items[0].solicitud.inventario_id
+    qr_duplicados = _codigos_qr_duplicados(
+        db, inventario_id,
+        {item.bien.codigo_qr for item in items if item.bien is not None},
+    )
+    lotes_abiertos = _lotes_abiertos_por_bien(
+        db, {item.bien_id for item in items if item.bien_id is not None}
+    )
     for item in items:
         solicitudes_afectadas.add(item.solicitud_id)
         if item.bien is None:
@@ -711,7 +859,15 @@ def crear_lote_desde_solicitudes(
             item.estado = "Observado"
             item.motivo_observacion = "El mismo bien fue incluido más de una vez."
             continue
-        razon = _razon_exclusion_control_impresion(item.bien)
+        razon = _razon_exclusion_control_impresion(
+            item.bien,
+            qr_duplicado=bool(
+                item.bien.codigo_qr
+                and item.bien.codigo_qr in qr_duplicados
+            ),
+            lote_abierto=lotes_abiertos.get(item.bien_id),
+            permitir_reimpresion=bool(item.es_reimpresion),
+        )
         if razon:
             if requiere_actualizar_area(item.bien):
                 item.estado = ESTADO_AREA_PENDIENTE
@@ -732,7 +888,6 @@ def crear_lote_desde_solicitudes(
             status_code=303,
         )
 
-    inventario_id = seleccionados[0].solicitud.inventario_id
     lote = LoteImpresionInventario(
         inventario_id=inventario_id,
         estado="Preparado",
@@ -818,10 +973,20 @@ def pdf_lote_impresion(
     )
     if lote is None:
         raise HTTPException(status_code=404, detail="Lote no encontrado.")
+    items_pendientes = [
+        item for item in lote.items if item.impreso_en is None
+    ]
+    if not items_pendientes:
+        return RedirectResponse(
+            url=f"/control-impresion/lotes/{lote_id}?error=" + quote_plus(
+                "El lote ya está completamente impreso."
+            ),
+            status_code=303,
+        )
     faltantes_area = [
         item.bien.codigo_qr
-        for item in lote.items
-        if item.impreso_en is None and requiere_actualizar_area(item.bien)
+        for item in items_pendientes
+        if requiere_actualizar_area(item.bien)
     ]
     if faltantes_area:
         codigos = ", ".join(faltantes_area[:10])
@@ -834,7 +999,7 @@ def pdf_lote_impresion(
             ),
             status_code=303,
         )
-    bienes = [_adaptar_bien_pdf(item.bien) for item in lote.items]
+    bienes = [_adaptar_bien_pdf(item.bien) for item in items_pendientes]
     perfil = _obtener_perfil_impresion(db)
     contenido = generar_pdf_etiquetas(bienes, perfil)
     _marcar_pdf_generado(db, lote)
@@ -859,6 +1024,8 @@ def _crear_excel_lote(lote) -> bytes:
     ]
     hoja.append(encabezados)
     for item in lote.items:
+        if item.impreso_en is not None:
+            continue
         bien = item.bien
         hoja.append([
             bien.codigo_patrimonial, bien.codigo_qr or "", bien.ruta_qr or "",

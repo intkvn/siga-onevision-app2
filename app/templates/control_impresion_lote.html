@@ -24,10 +24,16 @@
 </div>
 
 <div class="d-flex flex-wrap gap-2 mb-4">
-    <a class="btn btn-primary {{ 'disabled' if faltantes_area else '' }}" href="/control-impresion/lotes/{{ lote.id }}/pdf" target="_blank" {% if faltantes_area %}aria-disabled="true" tabindex="-1"{% endif %}>Generar / abrir PDF</a>
-    <a class="btn btn-success" href="/control-impresion/lotes/{{ lote.id }}/excel">Descargar Excel de control</a>
+    <a class="btn btn-primary {{ 'disabled' if faltantes_area or not pendientes else '' }}" href="/control-impresion/lotes/{{ lote.id }}/pdf" target="_blank" {% if faltantes_area or not pendientes %}aria-disabled="true" tabindex="-1"{% endif %}>Generar PDF de pendientes</a>
+    <a class="btn btn-success" href="/control-impresion/lotes/{{ lote.id }}/excel">Descargar Excel</a>
     <a class="btn btn-outline-secondary" href="/control-impresion?inventario_id={{ lote.inventario_id }}">Volver al inventario</a>
 </div>
+
+{% if impresos and pendientes %}
+<div class="alert alert-info">
+    El PDF y la hoja BarTender del Excel incluirán únicamente los {{ pendientes }} stickers todavía pendientes.
+</div>
+{% endif %}
 
 {% if faltantes_area %}
 <div class="alert alert-warning">

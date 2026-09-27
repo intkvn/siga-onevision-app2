@@ -17,6 +17,7 @@ from app.models import (
 from app.services.solicitudes_impresion import (
     ESTADO_AREA_PENDIENTE,
     ESTADO_SINCRONIZACION,
+    SolicitudSinItemsDisponiblesError,
     actualizar_estado_solicitud,
     crear_solicitud,
     normalizar_lista_qr,
@@ -67,6 +68,10 @@ def _contexto_portal(
         "inventario": inventario,
         "solicitudes": solicitudes,
         "resultados": resultados,
+        "cantidad_enviables": sum(
+            1 for resultado in (resultados or [])
+            if not resultado.get("omitir_solicitud", False)
+        ),
         "texto_qr": texto_qr,
         "max_qr": MAX_QR_SOLICITUD,
         "listos": sum(
@@ -147,17 +152,34 @@ def enviar_solicitud_inventariador(
             "/inventariador?error=" + quote_plus("La lista de QR no es válida."),
             status_code=303,
         )
-    solicitud = crear_solicitud(
-        db,
-        inventario.id,
-        request.session["usuario_id"],
-        codigos,
-        set(normalizar_lista_qr(" ".join(reimpresiones))),
+    resultados = validar_qrs_solicitud(db, inventario.id, codigos)
+    omitidos = sum(
+        1 for resultado in resultados
+        if resultado.get("omitir_solicitud", False)
     )
+    try:
+        solicitud = crear_solicitud(
+            db,
+            inventario.id,
+            request.session["usuario_id"],
+            codigos,
+            set(normalizar_lista_qr(" ".join(reimpresiones))),
+            resultados_validados=resultados,
+        )
+    except SolicitudSinItemsDisponiblesError as exc:
+        return RedirectResponse(
+            "/inventariador?error=" + quote_plus(
+                f"No se creó una nueva solicitud. {exc}"
+            ),
+            status_code=303,
+        )
+    mensaje = f"Solicitud #{solicitud.id} enviada con {len(solicitud.items)} QR."
+    if omitidos:
+        mensaje += (
+            f" Se omitieron {omitidos} QR que ya figuraban en solicitudes activas."
+        )
     return RedirectResponse(
-        "/inventariador?info=" + quote_plus(
-            f"Solicitud #{solicitud.id} enviada con {len(solicitud.items)} QR."
-        ),
+        "/inventariador?info=" + quote_plus(mensaje),
         status_code=303,
     )
 

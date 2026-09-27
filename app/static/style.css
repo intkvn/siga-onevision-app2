@@ -1,1 +1,80 @@
-/* Estilos adicionales (opcional). Por ahora la app usa Bootstrap vía CDN. */
+html,
+body {
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
+.navbar,
+.navbar > .container {
+    width: 100%;
+}
+
+@media (max-width: 767.98px) {
+    .vista-inventariador .navbar {
+        margin-bottom: 1rem !important;
+    }
+
+    .vista-inventariador .navbar .container,
+    .vista-inventariador > .container {
+        max-width: 100%;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .vista-inventariador .navbar-brand {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .vista-inventariador .navbar-collapse {
+        padding-top: .5rem;
+    }
+
+    .vista-inventariador .navbar-nav .nav-link {
+        padding: .65rem 0;
+        font-size: 1rem;
+    }
+
+    .vista-inventariador h2 {
+        font-size: 1.55rem;
+    }
+
+    .vista-inventariador .inventariador-resumen {
+        width: 100%;
+        display: grid !important;
+        grid-template-columns: 1fr;
+    }
+
+    .vista-inventariador .inventariador-resumen .badge {
+        width: 100%;
+        white-space: normal;
+        text-align: left;
+        line-height: 1.35;
+    }
+
+    .vista-inventariador .card-body {
+        padding: 1rem;
+    }
+
+    .vista-inventariador textarea[name="codigos_qr"] {
+        min-height: 9rem;
+        font-size: 1rem;
+    }
+
+    .vista-inventariador .accion-principal-movil {
+        width: 100%;
+    }
+
+    .solicitud-movil .badge {
+        white-space: normal;
+        text-align: left;
+        line-height: 1.3;
+    }
+
+    .solicitud-movil details summary {
+        min-height: 2.75rem;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+    }
+}

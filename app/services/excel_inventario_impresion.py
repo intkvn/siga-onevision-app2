@@ -15,6 +15,7 @@ from app.models import (
     CargaInventarioImpresion,
     InventarioImpresion,
 )
+from app.services.bulk_updates import actualizar_mapeos_por_id
 from app.services.solicitudes_impresion import reconciliar_solicitudes_pendientes
 
 
@@ -204,7 +205,28 @@ def importar_reporte_inventario(
         BienInventarioImpresion.activo != 1,
     ).update({BienInventarioImpresion.activo: 1}, synchronize_session=False)
 
-    bienes_existentes = db.query(BienInventarioImpresion).filter(
+    bienes_existentes = db.query(
+        BienInventarioImpresion.id,
+        BienInventarioImpresion.bien_alta_id,
+        BienInventarioImpresion.relacion_alta,
+        BienInventarioImpresion.codigo_patrimonial,
+        BienInventarioImpresion.codigo_qr,
+        BienInventarioImpresion.tipo_bien,
+        BienInventarioImpresion.ruta_qr,
+        BienInventarioImpresion.descripcion,
+        BienInventarioImpresion.establecimiento,
+        BienInventarioImpresion.red,
+        BienInventarioImpresion.area,
+        BienInventarioImpresion.marca,
+        BienInventarioImpresion.modelo,
+        BienInventarioImpresion.color,
+        BienInventarioImpresion.nro_serie,
+        BienInventarioImpresion.imprimible,
+        BienInventarioImpresion.motivo_bloqueo,
+        BienInventarioImpresion.estado_impresion,
+        BienInventarioImpresion.sticker_generado_en,
+        BienInventarioImpresion.activo,
+    ).filter(
         BienInventarioImpresion.inventario_id == inventario.id
     ).all()
     existentes_por_patrimonial = {}
@@ -320,11 +342,9 @@ def importar_reporte_inventario(
                 **registro,
             })
 
-    for inicio in range(0, len(actualizaciones), TAMANO_LOTE_BD):
-        db.bulk_update_mappings(
-            BienInventarioImpresion,
-            actualizaciones[inicio:inicio + TAMANO_LOTE_BD],
-        )
+    actualizar_mapeos_por_id(
+        db, BienInventarioImpresion, actualizaciones, tamano_lote=500
+    )
     for inicio in range(0, len(nuevos), TAMANO_LOTE_BD):
         db.bulk_insert_mappings(
             BienInventarioImpresion,

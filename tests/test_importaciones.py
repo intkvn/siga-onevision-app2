@@ -1099,6 +1099,43 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         self.assertEqual(cargas[-1].sin_cambios, 1)
         self.assertEqual(cargas[-1].total_universo, 2)
 
+    def test_control_impresion_actualiza_varios_bloques_en_forma_masiva(self):
+        cantidad = 225
+        inicial = self._reporte([
+            [
+                f"{indice:012d}", indice,
+                f"https://sir.example/qr/equipo/{indice}",
+                f"EQUIPO {indice}", "ESTABLECIMIENTO", "RED", "AREA",
+                "MARCA", "MODELO", "NEGRO", f"S-{indice}",
+            ]
+            for indice in range(1, cantidad + 1)
+        ])
+        importar_reporte_inventario(
+            self.db, inicial, "inicial.xlsx", anio="2026"
+        )
+
+        actualizado = self._reporte([
+            [
+                f"{indice:012d}", indice,
+                f"https://sir.example/qr/equipo/{indice}",
+                f"EQUIPO ACTUALIZADO {indice}", "ESTABLECIMIENTO", "RED", "AREA",
+                "MARCA", "MODELO", "NEGRO", f"S-{indice}",
+            ]
+            for indice in range(1, cantidad + 1)
+        ])
+        resultado = importar_reporte_inventario(
+            self.db, actualizado, "actualizado.xlsx", anio="2026"
+        )
+
+        self.assertEqual(resultado["actualizados"], cantidad)
+        self.assertEqual(resultado["nuevos"], 0)
+        self.assertEqual(
+            self.db.query(BienInventarioImpresion).filter(
+                BienInventarioImpresion.descripcion.like("EQUIPO ACTUALIZADO%")
+            ).count(),
+            cantidad,
+        )
+
     def test_importa_sobrante_sin_patrimonial_y_normaliza_qr(self):
         ruta = self._reporte([[
             None, "00000054", "https://sir.example/qr/equipo/54",

@@ -13,9 +13,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from openpyxl import load_workbook
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
+from app.services.bulk_updates import actualizar_mapeos_por_id
 from app.models import (
     BienCargaPatrimonial,
     BienPatrimonial,
@@ -597,11 +599,8 @@ def confirmar_carga_patrimonial(carga_id: int):
             versiones_pendientes = []
             cambios_por_bien: dict[int, list[dict]] = {}
             conflictos = []
-            enlaces_fila = []
             for fila in filas:
                 bien_id = ids_por_codigo.get(fila.codigo_patrimonial)
-                if bien_id:
-                    enlaces_fila.append({"id": fila.id, "bien_id": bien_id})
                 if fila.clasificacion == "No incluido":
                     continue
 
@@ -615,6 +614,9 @@ def confirmar_carga_patrimonial(carga_id: int):
                         "creado_en": ahora,
                         "snapshot": fila.datos_comparables,
                     })
+                    continue
+
+                if fila.clasificacion == "Sin cambios":
                     continue
 
                 bien = existentes.get(fila.codigo_patrimonial)
@@ -666,10 +668,7 @@ def confirmar_carga_patrimonial(carga_id: int):
                     })
                     cambios_por_bien[bien.id] = cambios
 
-            if actualizaciones:
-                db.bulk_update_mappings(BienPatrimonial, actualizaciones)
-            if enlaces_fila:
-                db.bulk_update_mappings(BienCargaPatrimonial, enlaces_fila)
+            actualizar_mapeos_por_id(db, BienPatrimonial, actualizaciones)
             if conflictos:
                 db.add_all(conflictos)
             if versiones_pendientes:
@@ -707,6 +706,43 @@ def confirmar_carga_patrimonial(carga_id: int):
             procesados += len(filas)
             if publicar_progreso:
                 _actualizar_progreso_confirmacion(carga.id, procesados, total_filas)
+
+        bien_id_relacionado = select(BienPatrimonial.id).where(
+            BienPatrimonial.codigo_patrimonial
+            == BienCargaPatrimonial.codigo_patrimonial
+        ).correlate(BienCargaPatrimonial).scalar_subquery()
+        db.execute(
+            update(BienCargaPatrimonial).where(
+                BienCargaPatrimonial.carga_id == carga.id
+            ).values(bien_id=bien_id_relacionado)
+        )
+
+        fila_vigente = select(BienCargaPatrimonial).where(
+            BienCargaPatrimonial.carga_id == carga.id,
+            BienCargaPatrimonial.clasificacion != "No incluido",
+            BienCargaPatrimonial.codigo_patrimonial
+            == BienPatrimonial.codigo_patrimonial,
+        ).correlate(BienPatrimonial)
+        codigos_vigentes = select(
+            BienCargaPatrimonial.codigo_patrimonial
+        ).where(
+            BienCargaPatrimonial.carga_id == carga.id,
+            BienCargaPatrimonial.clasificacion != "No incluido",
+        )
+        db.execute(
+            update(BienPatrimonial).where(
+                BienPatrimonial.codigo_patrimonial.in_(codigos_vigentes)
+            ).values(
+                datos_importados=fila_vigente.with_only_columns(
+                    BienCargaPatrimonial.datos_comparables
+                ).scalar_subquery(),
+                datos_fuente=fila_vigente.with_only_columns(
+                    BienCargaPatrimonial.datos_fuente
+                ).scalar_subquery(),
+                ultima_carga_id=carga.id,
+                actualizado_en=ahora,
+            )
+        )
 
         carga.estado = "Completada"
         carga.confirmado_en = ahora

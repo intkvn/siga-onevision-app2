@@ -7,13 +7,14 @@ import tempfile
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import xlrd
 import xlwt
 import pandas as pd
 from openpyxl import Workbook as OpenpyxlWorkbook, load_workbook
 from reportlab.lib.units import mm
+from reportlab.graphics.barcode.qr import QrCodeWidget
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -51,8 +52,8 @@ from app.services.excel_inventario_impresion import importar_reporte_inventario
 from app.services.lote_status import expedientes_de_lotes
 from app.services.pagination import paginas_visibles, rango_registros
 from app.services.pdf_etiquetas import (
-    _ajustar_bloques_inferiores, clasificar_bienes_impresion, generar_pdf_etiquetas,
-    numero_paginas_para_bienes,
+    _ajustar_bloques_inferiores, _dibujar_qr, _preparar_qr,
+    clasificar_bienes_impresion, generar_pdf_etiquetas, numero_paginas_para_bienes,
 )
 from app.services.solicitudes_impresion import (
     ESTADO_AREA_PENDIENTE, ESTADO_SINCRONIZACION,
@@ -242,6 +243,42 @@ class PdfEtiquetasTest(unittest.TestCase):
 
         tamano_qr = dibujar_qr.call_args.args[4]
         self.assertAlmostEqual(tamano_qr / mm, 27.0, places=2)
+
+    def test_qr_directo_conserva_la_matriz_del_codificador(self):
+        ruta = "https://sir.example/QR/Equipo/697351?origen=OneVision"
+        preparado = _preparar_qr(ruta)
+        widget = QrCodeWidget(
+            ruta, barLevel="M", barBorder=4,
+        )
+        widget.qr.make()
+        matriz_esperada = tuple(
+            tuple(bool(modulo) for modulo in fila)
+            for fila in widget.qr.modules
+        )
+
+        self.assertIsNotNone(preparado)
+        self.assertEqual(preparado.modulos, matriz_esperada)
+        self.assertAlmostEqual(preparado.tamano / mm, 27.0, places=2)
+
+        pdf = MagicMock()
+        _dibujar_qr(
+            pdf, ruta, 10.0, 20.0, preparado.tamano,
+            qr_preparado=preparado,
+        )
+        self.assertGreater(pdf.rect.call_count, 0)
+        pdf.saveState.assert_called_once_with()
+        pdf.restoreState.assert_called_once_with()
+        for llamada in pdf.rect.call_args_list:
+            self.assertEqual(llamada.kwargs, {"stroke": 0, "fill": 1})
+
+    def test_rechaza_qr_que_no_cabe_con_modulo_legible(self):
+        bien = self._bien(1, ruta="https://sir.example/qr/" + ("x" * 10000))
+
+        imprimibles, excluidos = clasificar_bienes_impresion([bien])
+
+        self.assertEqual(imprimibles, [])
+        self.assertEqual(len(excluidos), 1)
+        self.assertIn("extensa", excluidos[0]["razon"])
 
     def test_permite_etiqueta_de_sobrante_sin_codigo_patrimonial(self):
         bien = self._bien(1)

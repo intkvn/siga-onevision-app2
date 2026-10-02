@@ -1,11 +1,10 @@
 import io
 import math
 import re
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode.qr import QrCodeWidget
-from reportlab.graphics.shapes import Drawing
 from reportlab.lib.units import mm
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
@@ -31,6 +30,13 @@ MARGEN_INFERIOR_BLOQUES_MM = 4.6
 SEPARACION_BLOQUES_MM = 0.8
 
 
+@dataclass(frozen=True)
+class _QrPreparado:
+    modulos: tuple[tuple[bool, ...], ...]
+    tamano: float
+    puntos_por_modulo: int
+
+
 def texto_identificador(valor) -> str:
     if valor is None:
         return ""
@@ -41,7 +47,7 @@ def texto_etiqueta(valor) -> str:
     return re.sub(r"\s+", " ", str(valor or "")).strip()
 
 
-def razon_exclusion_bien(bien) -> str | None:
+def razon_exclusion_bien(bien, qr_preparado=None) -> str | None:
     ruta = "" if bien.ruta_qr is None else str(bien.ruta_qr)
     if not ruta:
         return "Sin Ruta QR"
@@ -56,8 +62,9 @@ def razon_exclusion_bien(bien) -> str | None:
     if not texto_identificador(bien.codigo_qr):
         return "Sin código QR"
 
-    configuracion_qr = _configuracion_qr(ruta)
-    if configuracion_qr is None:
+    if qr_preparado is None:
+        qr_preparado = _preparar_qr(ruta)
+    if qr_preparado is None:
         return "Ruta QR demasiado extensa para imprimirse con legibilidad"
 
     patrimonio = texto_identificador(bien.codigo_patrimonial)
@@ -106,13 +113,16 @@ def generar_pdf_etiquetas(bienes, perfil, destino=None):
     if not bienes:
         raise ValueError("No hay bienes válidos para generar el PDF.")
 
+    qr_preparados = []
     for bien in bienes:
-        razon = razon_exclusion_bien(bien)
+        qr_preparado = _preparar_qr(str(bien.ruta_qr or ""))
+        razon = razon_exclusion_bien(bien, qr_preparado=qr_preparado)
         if razon:
             raise ValueError(
                 f"El bien {texto_identificador(bien.codigo_patrimonial) or texto_identificador(bien.codigo_qr)} "
                 f"no se puede imprimir: {razon}."
             )
+        qr_preparados.append(qr_preparado)
 
     buffer_propio = destino is None
     salida = io.BytesIO() if buffer_propio else destino
@@ -160,6 +170,7 @@ def generar_pdf_etiquetas(bienes, perfil, destino=None):
                 bien,
                 perfil,
                 posiciones_y[posicion],
+                qr_preparado=qr_preparados[indice + posicion],
             )
         pdf.showPage()
 
@@ -173,7 +184,9 @@ def numero_paginas_para_bienes(cantidad: int) -> int:
     return math.ceil(cantidad / 2)
 
 
-def _dibujar_etiqueta_logica(pdf, bien, perfil, posicion_y_mm: float):
+def _dibujar_etiqueta_logica(
+    pdf, bien, perfil, posicion_y_mm: float, qr_preparado=None,
+):
     ancho_logico = perfil.alto_etiqueta_mm * mm
     alto_logico = perfil.ancho_etiqueta_mm * mm
     # Tras el giro del controlador, el eje Y logico corresponde al ajuste
@@ -197,11 +210,14 @@ def _dibujar_etiqueta_logica(pdf, bien, perfil, posicion_y_mm: float):
         ancho=ancho_logico,
         alto=alto_logico,
         perfil=perfil,
+        qr_preparado=qr_preparado,
     )
     pdf.restoreState()
 
 
-def _dibujar_contenido_vertical(pdf, bien, ancho, alto, perfil):
+def _dibujar_contenido_vertical(
+    pdf, bien, ancho, alto, perfil, qr_preparado=None,
+):
     margen_x = 1.5 * mm
     ancho_util = ancho - (2 * margen_x)
 
@@ -221,14 +237,17 @@ def _dibujar_contenido_vertical(pdf, bien, ancho, alto, perfil):
         )
 
     ruta = str(bien.ruta_qr)
-    configuracion_qr = _configuracion_qr(ruta)
-    if configuracion_qr is None:
+    if qr_preparado is None:
+        qr_preparado = _preparar_qr(ruta)
+    if qr_preparado is None:
         raise ValueError("La Ruta QR no cabe con el tamaño mínimo de módulo.")
-    tamano_qr, _ = configuracion_qr
+    tamano_qr = qr_preparado.tamano
     qr_superior = alto - MARGEN_SUPERIOR_QR_MM * mm
     qr_x = (ancho - tamano_qr) / 2
     qr_y = qr_superior - tamano_qr
-    _dibujar_qr(pdf, ruta, qr_x, qr_y, tamano_qr)
+    _dibujar_qr(
+        pdf, ruta, qr_x, qr_y, tamano_qr, qr_preparado=qr_preparado,
+    )
 
     patrimonio = texto_identificador(bien.codigo_patrimonial)
     codigo_visible = (
@@ -263,38 +282,79 @@ def _dibujar_contenido_vertical(pdf, bien, ancho, alto, perfil):
     _dibujar_pie_inventario(pdf, ancho, perfil)
 
 
-def _dibujar_qr(pdf, valor: str, x: float, y: float, tamano: float):
-    widget = QrCodeWidget(
-        valor,
-        barLevel="M",
-        barBorder=BORDE_QR_MODULOS,
-        barWidth=tamano,
-        barHeight=tamano,
+def _dibujar_qr(
+    pdf, valor: str, x: float, y: float, tamano: float,
+    qr_preparado=None,
+):
+    if qr_preparado is None:
+        qr_preparado = _preparar_qr(valor)
+    if qr_preparado is None:
+        raise ValueError("La Ruta QR no cabe con el tamaño mínimo de módulo.")
+
+    modulos = qr_preparado.modulos
+    cantidad_modulos = len(modulos)
+    tamano_modulo = tamano / (
+        cantidad_modulos + (2 * BORDE_QR_MODULOS)
     )
-    dibujo = Drawing(tamano, tamano)
-    dibujo.add(widget)
-    renderPDF.draw(dibujo, pdf, x, y)
+    pdf.saveState()
+    pdf.setFillColorRGB(0, 0, 0)
+    for fila, modulos_fila in enumerate(modulos):
+        inicio_bloque = None
+        for columna in range(cantidad_modulos + 1):
+            oscuro = (
+                columna < cantidad_modulos and modulos_fila[columna]
+            )
+            if oscuro and inicio_bloque is None:
+                inicio_bloque = columna
+            elif not oscuro and inicio_bloque is not None:
+                ancho_bloque = (columna - inicio_bloque) * tamano_modulo
+                pdf.rect(
+                    x + (inicio_bloque + BORDE_QR_MODULOS) * tamano_modulo,
+                    y + (
+                        cantidad_modulos - fila - 1 + BORDE_QR_MODULOS
+                    ) * tamano_modulo,
+                    ancho_bloque,
+                    tamano_modulo,
+                    stroke=0,
+                    fill=1,
+                )
+                inicio_bloque = None
+    pdf.restoreState()
 
 
-def _configuracion_qr(valor: str):
+def _preparar_qr(valor: str):
     try:
         widget = QrCodeWidget(
             valor,
             barLevel="M",
             barBorder=BORDE_QR_MODULOS,
         )
-        modulos_totales = widget.qr.moduleCount + (2 * BORDE_QR_MODULOS)
-    except (TypeError, ValueError, OverflowError):
+        widget.qr.make()
+        modulos = tuple(
+            tuple(bool(modulo) for modulo in fila)
+            for fila in widget.qr.modules
+        )
+        modulos_totales = len(modulos) + (2 * BORDE_QR_MODULOS)
+    # ReportLab usa Exception base cuando la capacidad maxima del QR se excede.
+    except Exception:
         return None
 
     puntos_disponibles = int(MAXIMO_QR_MM * PUNTOS_IMPRESORA_POR_MM)
     puntos_por_modulo = puntos_disponibles // modulos_totales
     if puntos_por_modulo < MINIMO_PUNTOS_POR_MODULO:
         return None
-    tamano_mm = (
-        modulos_totales * puntos_por_modulo / PUNTOS_IMPRESORA_POR_MM
+    return _QrPreparado(
+        modulos=modulos,
+        tamano=MAXIMO_QR_MM * mm,
+        puntos_por_modulo=puntos_por_modulo,
     )
-    return tamano_mm * mm, puntos_por_modulo
+
+
+def _configuracion_qr(valor: str):
+    qr_preparado = _preparar_qr(valor)
+    if qr_preparado is None:
+        return None
+    return qr_preparado.tamano, qr_preparado.puntos_por_modulo
 
 
 def _dibujar_centrado_escalado(

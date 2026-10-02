@@ -51,6 +51,13 @@ MAX_BIENES_POR_LOTE = 1000
 SIN_DATO = "__SIN_DATO__"
 
 
+def _dividir_lotes(elementos):
+    return [
+        elementos[inicio:inicio + MAX_BIENES_POR_LOTE]
+        for inicio in range(0, len(elementos), MAX_BIENES_POR_LOTE)
+    ]
+
+
 def _filtrar_valor(consulta, columna, valor):
     if not valor:
         return consulta
@@ -647,16 +654,6 @@ def crear_lote_impresion(
         raise HTTPException(status_code=400, detail="Alcance no válido.")
 
     bienes = consulta.order_by(BienInventarioImpresion.id).all()
-    if len(bienes) > MAX_BIENES_POR_LOTE:
-        mensaje = (
-            f"La selección tiene {len(bienes)} bienes. El máximo por lote es "
-            f"{MAX_BIENES_POR_LOTE}; aplica más filtros."
-        )
-        return RedirectResponse(
-            url=f"/control-impresion?inventario_id={inventario_id}&error="
-                + quote_plus(mensaje),
-            status_code=303,
-        )
 
     qr_duplicados = _codigos_qr_duplicados(
         db, inventario_id, {bien.codigo_qr for bien in bienes}
@@ -715,38 +712,66 @@ def crear_lote_impresion(
         "reimpresion_confirmada": confirmar_reimpresion,
         "excluidos": len(excluidos),
     }
-    lote = LoteImpresionInventario(
-        inventario_id=inventario_id,
-        estado="Preparado",
-        filtros=json.dumps(filtros, ensure_ascii=False),
-        total_bienes=len(seleccionados),
-    )
-    db.add(lote)
-    db.flush()
+    grupos = _dividir_lotes(seleccionados)
+    total_lotes = len(grupos)
+    lotes = []
     solicitudes_afectadas = set()
-    for bien, solicitud_item in seleccionados:
-        db.add(ItemLoteImpresionInventario(
-            lote_id=lote.id,
-            bien_id=bien.id,
-            solicitud_item_id=solicitud_item.id if solicitud_item else None,
-        ))
-        if solicitud_item:
-            solicitud_item.estado = "En lote"
-            solicitudes_afectadas.add(solicitud_item.solicitud_id)
+    for numero_lote, grupo in enumerate(grupos, start=1):
+        filtros_lote = dict(filtros)
+        if total_lotes > 1:
+            filtros_lote.update({
+                "division_automatica": True,
+                "parte": numero_lote,
+                "total_partes": total_lotes,
+            })
+        lote = LoteImpresionInventario(
+            inventario_id=inventario_id,
+            estado="Preparado",
+            filtros=json.dumps(filtros_lote, ensure_ascii=False),
+            total_bienes=len(grupo),
+        )
+        db.add(lote)
+        db.flush()
+        lotes.append(lote)
+        for bien, solicitud_item in grupo:
+            db.add(ItemLoteImpresionInventario(
+                lote_id=lote.id,
+                bien_id=bien.id,
+                solicitud_item_id=solicitud_item.id if solicitud_item else None,
+            ))
+            if solicitud_item:
+                solicitud_item.estado = "En lote"
+                solicitudes_afectadas.add(solicitud_item.solicitud_id)
     db.flush()
     for solicitud_id in solicitudes_afectadas:
         actualizar_estado_solicitud(
             db.get(SolicitudImpresionInventario, solicitud_id)
         )
     db.commit()
-    info = f"Lote preparado con {len(seleccionados)} bienes."
+    if total_lotes == 1:
+        info = f"Lote preparado con {len(seleccionados)} bienes."
+    else:
+        ids_lotes = ", ".join(f"#{lote.id}" for lote in lotes)
+        tamanos = ", ".join(str(lote.total_bienes) for lote in lotes)
+        info = (
+            f"Se prepararon {total_lotes} lotes ({ids_lotes}) con "
+            f"{len(seleccionados)} bienes. Distribución: {tamanos}."
+        )
     if excluidos:
         info += (
             f" Se excluyeron {len(excluidos)} bienes por validaciones "
             "de impresión."
         )
+    if total_lotes > 1:
+        return RedirectResponse(
+            url=(
+                f"/control-impresion?inventario_id={inventario_id}&info="
+                + quote_plus(info)
+            ),
+            status_code=303,
+        )
     return RedirectResponse(
-        url=f"/control-impresion/lotes/{lote.id}?info={quote_plus(info)}",
+        url=f"/control-impresion/lotes/{lotes[0].id}?info={quote_plus(info)}",
         status_code=303,
     )
 
@@ -831,13 +856,6 @@ def crear_lote_desde_solicitudes(
             + quote_plus("Selecciona solicitudes de un solo inventario."),
             status_code=303,
         )
-    if len(items) > MAX_BIENES_POR_LOTE:
-        return RedirectResponse(
-            "/control-impresion/solicitudes?error=" + quote_plus(
-                f"El máximo por lote es {MAX_BIENES_POR_LOTE} QR."
-            ), status_code=303,
-        )
-
     seleccionados = []
     bienes_vistos = set()
     solicitudes_afectadas = set()
@@ -888,29 +906,52 @@ def crear_lote_desde_solicitudes(
             status_code=303,
         )
 
-    lote = LoteImpresionInventario(
-        inventario_id=inventario_id,
-        estado="Preparado",
-        filtros=json.dumps({"origen": "Solicitudes de inventariadores"}),
-        total_bienes=len(seleccionados),
-    )
-    db.add(lote)
-    db.flush()
-    for item in seleccionados:
-        db.add(ItemLoteImpresionInventario(
-            lote_id=lote.id,
-            bien_id=item.bien_id,
-            solicitud_item_id=item.id,
-        ))
-        item.estado = "En lote"
+    grupos = _dividir_lotes(seleccionados)
+    total_lotes = len(grupos)
+    lotes = []
+    for numero_lote, grupo in enumerate(grupos, start=1):
+        filtros = {"origen": "Solicitudes de inventariadores"}
+        if total_lotes > 1:
+            filtros.update({
+                "division_automatica": True,
+                "parte": numero_lote,
+                "total_partes": total_lotes,
+            })
+        lote = LoteImpresionInventario(
+            inventario_id=inventario_id,
+            estado="Preparado",
+            filtros=json.dumps(filtros, ensure_ascii=False),
+            total_bienes=len(grupo),
+        )
+        db.add(lote)
+        db.flush()
+        lotes.append(lote)
+        for item in grupo:
+            db.add(ItemLoteImpresionInventario(
+                lote_id=lote.id,
+                bien_id=item.bien_id,
+                solicitud_item_id=item.id,
+            ))
+            item.estado = "En lote"
     db.flush()
     for solicitud_id in solicitudes_afectadas:
         actualizar_estado_solicitud(db.get(SolicitudImpresionInventario, solicitud_id))
     db.commit()
+    if total_lotes == 1:
+        return RedirectResponse(
+            f"/control-impresion/lotes/{lotes[0].id}?info=" + quote_plus(
+                f"Lote preparado con {len(seleccionados)} QR solicitados."
+            ), status_code=303,
+        )
+    ids_lotes = ", ".join(f"#{lote.id}" for lote in lotes)
+    tamanos = ", ".join(str(lote.total_bienes) for lote in lotes)
+    info = (
+        f"Se prepararon {total_lotes} lotes ({ids_lotes}) con "
+        f"{len(seleccionados)} QR solicitados. Distribución: {tamanos}."
+    )
     return RedirectResponse(
-        f"/control-impresion/lotes/{lote.id}?info=" + quote_plus(
-            f"Lote preparado con {len(seleccionados)} QR solicitados."
-        ), status_code=303,
+        "/control-impresion/solicitudes?info=" + quote_plus(info),
+        status_code=303,
     )
 
 

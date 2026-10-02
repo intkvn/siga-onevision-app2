@@ -60,7 +60,7 @@ El último conjunto de cambios de Control Impresión e interfaz móvil fue envia
 - Conservación de lotes y confirmaciones previas.
 - Filtros por red, establecimiento, área, estado, tipo y búsqueda.
 - Resumen por establecimiento.
-- Lotes de hasta 1000 bienes.
+- Lotes de hasta 1000 bienes con división automática de selecciones mayores.
 - Bloqueo de QR duplicados y lotes abiertos duplicados.
 - Reimpresión con confirmación explícita.
 - PDF, Excel BarTender y hoja de control.

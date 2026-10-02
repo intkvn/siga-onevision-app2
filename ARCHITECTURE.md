@@ -327,7 +327,7 @@ sequenceDiagram
 - PostgreSQL usa `pool_pre_ping=True` y recicla conexiones a los 240 segundos.
 - Control Impresión busca por prefijo en código patrimonial y QR; busca descripción por contenido cuando hay al menos tres caracteres.
 - El Maestro Patrimonial crea índices convencionales y, si PostgreSQL lo permite, habilita `pg_trgm` e índices GIN para búsquedas parciales.
-- Los lotes de Control Impresión están limitados a 1000 bienes.
+- Cada lote de Control Impresión está limitado a 1000 bienes. Una selección mayor se divide automáticamente en varios lotes registrados por separado.
 - Las solicitudes están limitadas a 500 QR.
 - La importación de Control Impresión deduplica en memoria antes de escribir.
 - La confirmación patrimonial usa una transacción para aplicar la carga. Si falla, revierte y marca `Interrumpida`.

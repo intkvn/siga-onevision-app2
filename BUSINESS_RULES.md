@@ -423,7 +423,9 @@ Los items observados no se consideran válidos para determinar avance.
 ### 13.1 Selección directa
 
 - Se puede seleccionar filas visibles o todos los bienes filtrados.
-- Máximo 1000 bienes.
+- Cada lote contiene como máximo 1000 bienes.
+- Una selección válida mayor se divide automáticamente en varios lotes de hasta 1000 bienes.
+- Todos los lotes de la división se crean en una sola transacción y quedan registrados por separado.
 - Se excluye un bien si:
   - es DIRESA sin área;
   - su QR está repetido en el inventario;
@@ -442,6 +444,7 @@ Los items observados no se consideran válidos para determinar avance.
 4. El mismo bien solo puede aparecer una vez en el lote.
 5. Items inválidos pasan a `Observado` o a pendiente de área.
 6. Items válidos pasan a `En lote`.
+7. Si hay más de 1000 items válidos, se dividen automáticamente en varios lotes de hasta 1000.
 
 ### 13.3 PDF, Excel y confirmación
 

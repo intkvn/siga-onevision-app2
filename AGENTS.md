@@ -18,6 +18,7 @@ Consulta los documentos según la tarea:
 - Usa `ARCHITECTURE.md` para componentes, límites y decisiones de arquitectura.
 - Usa `DATA_MODEL.md` para modelos, tablas, campos y relaciones.
 - Usa `BUSINESS_RULES.md` para validaciones y flujos funcionales.
+- Usa `REQUIREMENTS.md` para requerimientos acordados que todavía no han sido implementados.
 - Usa `STATUS.md` para estado, problemas conocidos y backlog.
 
 No asumas que la documentación refleja cambios externos recientes. Contrasta con el código, Git y el estado actual antes de actuar.

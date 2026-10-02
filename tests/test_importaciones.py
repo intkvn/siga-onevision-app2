@@ -67,8 +67,8 @@ from app.routers.verificacion import (
 from app.routers.control_impresion import (
     _adaptar_bien_pdf, _codigos_qr_duplicados, _confirmar_items_impresos,
     _crear_excel_lote, _estado_bien, _lotes_abiertos_por_bien,
-    _marcar_pdf_generado, _opciones_distintas, crear_lote_impresion,
-    pdf_lote_impresion,
+    _marcar_pdf_generado, _opciones_distintas, crear_lote_desde_solicitudes,
+    crear_lote_impresion, pdf_lote_impresion,
 )
 from app.routers.maestro_patrimonial import (
     _aplicar_filtros, _datos_firmante, _resumen_calidad_datos,
@@ -1542,6 +1542,140 @@ class ControlImpresionInventarioTest(unittest.TestCase):
         self.db.refresh(solicitud.items[0])
         self.assertEqual(item_lote.solicitud_item_id, solicitud.items[0].id)
         self.assertEqual(solicitud.items[0].estado, "En lote")
+        self.assertEqual(solicitud.estado, "En lote")
+
+    def test_lote_directo_divide_automaticamente_seleccion_grande(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        bienes = [
+            BienInventarioImpresion(
+                inventario=inventario,
+                codigo_patrimonial=f"00000000000{indice}",
+                codigo_qr=str(710 + indice),
+                tipo_bien="Activo fijo",
+                ruta_qr=f"https://sir.example/qr/{710 + indice}",
+                descripcion=f"BIEN {indice}",
+                establecimiento="ESTABLECIMIENTO A",
+                imprimible=1,
+            )
+            for indice in range(1, 1719)
+        ]
+        self.db.add_all([inventario, *bienes])
+        self.db.commit()
+
+        respuesta = crear_lote_impresion(
+            inventario_id=inventario.id,
+            alcance="filtrados",
+            bien_ids=[],
+            red="",
+            establecimiento="",
+            area="",
+            estado="",
+            tipo_bien="",
+            q="",
+            confirmar_reimpresion=False,
+            db=self.db,
+            _=None,
+        )
+
+        lotes = self.db.query(LoteImpresionInventario).order_by(
+            LoteImpresionInventario.id
+        ).all()
+        self.assertEqual(respuesta.status_code, 303)
+        self.assertIn("/control-impresion?inventario_id=", respuesta.headers["location"])
+        self.assertEqual([lote.total_bienes for lote in lotes], [1000, 718])
+        self.assertEqual([len(lote.items) for lote in lotes], [1000, 718])
+        self.assertEqual(
+            [json.loads(lote.filtros)["parte"] for lote in lotes], [1, 2]
+        )
+        self.assertEqual(
+            [json.loads(lote.filtros)["total_partes"] for lote in lotes], [2, 2]
+        )
+
+        primera_consulta = self.db.query(ItemLoteImpresionInventario).filter_by(
+            lote_id=lotes[0].id
+        )
+        self.assertEqual(
+            _confirmar_items_impresos(self.db, lotes[0], primera_consulta), 1000
+        )
+        self.assertEqual(
+            self.db.query(BienInventarioImpresion).filter_by(
+                estado_impresion="Impreso"
+            ).count(),
+            1000,
+        )
+        self.assertEqual(
+            self.db.query(BienInventarioImpresion).filter_by(
+                estado_impresion="Pendiente"
+            ).count(),
+            718,
+        )
+
+        segunda_consulta = self.db.query(ItemLoteImpresionInventario).filter_by(
+            lote_id=lotes[1].id
+        )
+        self.assertEqual(
+            _confirmar_items_impresos(self.db, lotes[1], segunda_consulta), 718
+        )
+        self.assertEqual(
+            self.db.query(BienInventarioImpresion).filter_by(
+                estado_impresion="Impreso"
+            ).count(),
+            1718,
+        )
+
+    def test_solicitudes_dividen_automaticamente_seleccion_grande(self):
+        inventario = InventarioImpresion(
+            nombre="Inventario 2026", anio="2026", unidad_ejecutora="DIRESA"
+        )
+        usuario = UsuarioAplicacion(
+            username="inventariador-division", nombre_completo="INVENTARIADOR",
+            password_hash="hash", rol="Inventariador",
+        )
+        bienes = [
+            BienInventarioImpresion(
+                inventario=inventario,
+                codigo_patrimonial=f"00000000100{indice}",
+                codigo_qr=str(720 + indice),
+                tipo_bien="Activo fijo",
+                ruta_qr=f"https://sir.example/qr/{720 + indice}",
+                descripcion=f"BIEN {indice}",
+                establecimiento="ESTABLECIMIENTO A",
+                imprimible=1,
+            )
+            for indice in range(1, 4)
+        ]
+        self.db.add_all([inventario, usuario, *bienes])
+        self.db.commit()
+        solicitud = crear_solicitud(
+            self.db,
+            inventario.id,
+            usuario.id,
+            [bien.codigo_qr for bien in bienes],
+        )
+
+        with patch("app.routers.control_impresion.MAX_BIENES_POR_LOTE", 2):
+            respuesta = crear_lote_desde_solicitudes(
+                item_ids=[item.id for item in solicitud.items],
+                db=self.db,
+                _=None,
+            )
+
+        lotes = self.db.query(LoteImpresionInventario).order_by(
+            LoteImpresionInventario.id
+        ).all()
+        self.db.refresh(solicitud)
+        self.assertEqual(respuesta.status_code, 303)
+        self.assertIn(
+            "/control-impresion/solicitudes?info=",
+            respuesta.headers["location"],
+        )
+        self.assertEqual([lote.total_bienes for lote in lotes], [2, 1])
+        self.assertEqual([len(lote.items) for lote in lotes], [2, 1])
+        self.assertEqual(
+            {item.estado for item in solicitud.items}, {"En lote"}
+        )
         self.assertEqual(solicitud.estado, "En lote")
 
     def test_solicitud_nueva_se_vincula_a_lote_abierto(self):
